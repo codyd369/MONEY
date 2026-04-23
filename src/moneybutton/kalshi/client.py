@@ -106,6 +106,16 @@ class KalshiClient:
         """
         url = self._base_url() + path
         headers: dict[str, str] = {"accept": "application/json"}
+
+        # httpx (unlike requests) sends None-valued params as empty strings,
+        # which Kalshi rejects with "invalid syntax" on int-typed fields.
+        # Drop Nones here so both httpx and the signing-string view match.
+        clean_params: dict[str, Any] | None = None
+        if params:
+            clean_params = {k: v for k, v in params.items() if v is not None}
+            if not clean_params:
+                clean_params = None
+
         if signed:
             if self.signer is None:
                 # Lazy-construct the signer only if it can succeed.
@@ -115,9 +125,9 @@ class KalshiClient:
                 # Kalshi signs path+query, not query-stripped path. httpx
                 # rebuilds the query; we recompute the same string here.
                 query = ""
-                if params:
+                if clean_params:
                     query = "?" + "&".join(
-                        f"{k}={_to_query_value(v)}" for k, v in params.items() if v is not None
+                        f"{k}={_to_query_value(v)}" for k, v in clean_params.items()
                     )
                 headers.update(self.signer.headers_for(method, path + query))
 
@@ -125,7 +135,7 @@ class KalshiClient:
             method=method,
             url=url,
             headers=headers,
-            params=params,
+            params=clean_params,
             json_body=json_body,
             path=path,
         )
