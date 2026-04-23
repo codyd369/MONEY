@@ -82,6 +82,16 @@ def _parse_args() -> argparse.Namespace:
         default=EVENT_PREFIX_EXCLUDE_DEFAULT,
         help="Drop events whose event_ticker starts with any of these (default: KXMVE).",
     )
+    p.add_argument(
+        "--include-mutually-exclusive",
+        action="store_true",
+        help=(
+            "Include mutually-exclusive events (MEE — 'who among N candidates wins?'). "
+            "Default is to SKIP them: they're a bad fit for calibration because the "
+            "outcome is driven by external news/politics, not features we can learn "
+            "from price. Binary yes/no events (mutually_exclusive=false) are kept."
+        ),
+    )
     p.add_argument("--rate-limit-sleep-s", type=float, default=DEFAULT_RATE_LIMIT_SLEEP_S)
     p.add_argument("--reset-cursor", action="store_true")
     return p.parse_args()
@@ -195,6 +205,7 @@ def main() -> int:
     events_processed = 0
     events_skipped_old = 0
     events_skipped_prefix = 0
+    events_skipped_mee = 0
 
     try:
         cursor = progress.cursor
@@ -208,6 +219,9 @@ def main() -> int:
                     continue
                 if _should_skip_event(ev, args.exclude_event_prefix):
                     events_skipped_prefix += 1
+                    continue
+                if not args.include_mutually_exclusive and bool(ev.get("mutually_exclusive", False)):
+                    events_skipped_mee += 1
                     continue
 
                 close_ts = _ts(ev)
@@ -284,9 +298,13 @@ def main() -> int:
         client.close()
 
     print()
-    print(f"done. events_processed={events_processed} "
-          f"skipped_old={events_skipped_old} skipped_prefix={events_skipped_prefix} "
-          f"elapsed={time.monotonic() - t0:.0f}s")
+    print(
+        f"done. events_processed={events_processed} "
+        f"skipped_old={events_skipped_old} "
+        f"skipped_prefix={events_skipped_prefix} "
+        f"skipped_mee={events_skipped_mee} "
+        f"elapsed={time.monotonic() - t0:.0f}s"
+    )
     print()
     print(f"{'category':<25} {'events':>8} {'markets':>10}")
     for cat in sorted(per_cat_markets.keys()):
@@ -298,9 +316,11 @@ def main() -> int:
         payload={
             "categories": args.categories,
             "since": str(since),
+            "include_mutually_exclusive": args.include_mutually_exclusive,
             "events_processed": events_processed,
             "events_skipped_old": events_skipped_old,
             "events_skipped_prefix": events_skipped_prefix,
+            "events_skipped_mee": events_skipped_mee,
             "per_category_markets": per_cat_markets,
         },
         outcome="OK",

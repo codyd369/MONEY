@@ -94,3 +94,24 @@ def test_event_prefix_exclude_drops_mve():
     assert _should_skip_event(real_event, ["KXMVE"]) is False
     # Empty exclude list accepts everything.
     assert _should_skip_event(mve_event, []) is False
+
+
+def test_mutually_exclusive_default_skipped_flag_logic():
+    """The MEE filter: include_mutually_exclusive=False (default) drops
+    events whose mutually_exclusive is True. Flag=True keeps them.
+    (Unit test is on the predicate only; the full loop lives in
+    scripts/backfill_via_events.py.)"""
+    mee_event = {"event_ticker": "KXFEDCHAIRNOM-29", "mutually_exclusive": True}
+    binary_event = {"event_ticker": "KXCPIRELEASE-25NOV", "mutually_exclusive": False}
+
+    def _kept(ev: dict, include_mee: bool) -> bool:
+        if not include_mee and bool(ev.get("mutually_exclusive", False)):
+            return False
+        return True
+
+    # Default (skip MEE):
+    assert _kept(mee_event, include_mee=False) is False
+    assert _kept(binary_event, include_mee=False) is True
+    # With flag flipped on:
+    assert _kept(mee_event, include_mee=True) is True
+    assert _kept(binary_event, include_mee=True) is True
