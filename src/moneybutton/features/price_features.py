@@ -6,6 +6,7 @@ import datetime as dt
 import math
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from moneybutton.features.common import filter_before
@@ -23,10 +24,28 @@ def _nearest_before(df: pd.DataFrame, ts_cutoff: dt.datetime) -> pd.Series | Non
 def _mid_from_row(row: pd.Series) -> float | None:
     bid = row.get("yes_bid_close")
     ask = row.get("yes_ask_close")
-    if bid is None or ask is None or (isinstance(bid, float) and math.isnan(bid)) or (isinstance(ask, float) and math.isnan(ask)):
+
+    def _last_price() -> float | None:
         last = row.get("last_price_close")
-        return float(last) / 100.0 if last is not None and not (isinstance(last, float) and math.isnan(last)) else None
-    return (float(bid) + float(ask)) / 200.0
+        if last is None or (isinstance(last, float) and math.isnan(last)):
+            return None
+        v = float(last) / 100.0
+        return v if 0.0 < v < 1.0 else None
+
+    if bid is None or ask is None or (isinstance(bid, float) and math.isnan(bid)) or (isinstance(ask, float) and math.isnan(ask)):
+        return _last_price()
+
+    bid_f = float(bid)
+    ask_f = float(ask)
+    # Kalshi's "no quote" sentinels: bid=0 (no buyer) or ask=100 (no seller)
+    # produce a meaningless 0.5 mid. Fall back to last_price if there's
+    # actually been a trade, else None — never a synthetic 0.5.
+    if bid_f <= 0 or ask_f >= 100:
+        return _last_price()
+    mid = (bid_f + ask_f) / 200.0
+    if mid <= 0.0 or mid >= 1.0:
+        return None
+    return mid
 
 
 def compute(
@@ -75,6 +94,10 @@ def compute(
         max_24h = min_24h = range_24h = realized_vol = None
     else:
         mids = last_24h.apply(_mid_from_row, axis=1).dropna().astype(float)
+        # Belt-and-braces: a row with bid=0/ask=0 (no quote at all) would still
+        # produce mid=0 in some defensive paths. Drop non-positive mids before
+        # any log/return arithmetic.
+        mids = mids[(mids > 0) & (mids < 1)]
         if mids.empty:
             max_24h = min_24h = range_24h = realized_vol = None
         else:
@@ -82,7 +105,7 @@ def compute(
             min_24h = float(mids.min())
             range_24h = max_24h - min_24h
             if len(mids) >= 3:
-                returns = mids.apply(math.log).diff().dropna()
+                returns = np.log(mids).diff().dropna()
                 realized_vol = float(returns.std()) if len(returns) > 1 else None
             else:
                 realized_vol = None
