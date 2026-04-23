@@ -129,6 +129,27 @@ class CapitalAllocator:
         allocation_room = self.room_usd(strategy)
         size = min(raw_size, per_trade_cap, allocation_room)
 
+        # Worst-case total $ at risk = notional + worst-case fees.
+        # Kalshi charges whole cents per contract:
+        #   fee_per_contract_cents = ceil(fee_rate * 100 * p * (1-p))
+        # For p<=0.10 the ceiling rounds 0.3-0.7 up to 1c and fees can
+        # equal the notional. MAX_POSITION_USD must cap TOTAL risk, not
+        # just notional, so we shrink size here when the fee is material.
+        from moneybutton.backtest.fees import fee_per_contract_cents
+
+        fee_per_c_cents = fee_per_contract_cents(entry_price_cents)
+        if fee_per_c_cents > 0:
+            # contracts at the candidate size:
+            contracts = int(size // (entry_price_cents / 100.0)) if size > 0 else 0
+            total_fee_usd = contracts * fee_per_c_cents / 100.0
+            total_risk_usd = size + total_fee_usd
+            if total_risk_usd > per_trade_cap + 1e-9:
+                # Solve: size + (size / (p_cents/100)) * fee_per_c_cents/100 <= cap
+                #   size * (1 + fee_per_c_cents / p_cents) <= cap
+                #   size <= cap / (1 + fee_per_c_cents / p_cents)
+                safe_size = per_trade_cap / (1.0 + fee_per_c_cents / entry_price_cents)
+                size = min(size, safe_size)
+
         if size < self.settings.min_trade_usd:
             return SizingDecision(
                 0.0,

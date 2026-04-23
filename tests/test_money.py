@@ -189,6 +189,44 @@ def test_never_exceeds_max_position(tmp_db):
     assert decision.size_usd <= settings.max_position_usd + 1e-9
 
 
+def test_notional_plus_worst_case_fees_under_max_position(tmp_db):
+    """Regression for a real safety bug: MAX_POSITION_USD must cap TOTAL
+    dollars at risk, not just notional. Kalshi's integer-cent fees on
+    deep-OTM contracts (1-10c) can equal or exceed the notional because
+    ceil(fee_rate * p * (1-p) * 100) rounds 0.3-0.7 up to 1c per contract.
+
+    Example: $25 notional at 1c = 2500 contracts; 1c fee/contract = $25
+    of fees. Worst-case loss = $50, double the intended cap.
+    """
+    from moneybutton.backtest.fees import fee_per_contract_cents
+    from moneybutton.core.config import get_settings
+    from moneybutton.core.money import CapitalAllocator
+
+    settings = get_settings()
+    alloc = CapitalAllocator(db_path=tmp_db, settings=settings)
+
+    # Deep-OTM: 1c entry, huge edge.
+    for entry_cents in (1, 2, 3, 5, 10, 25, 50, 95):
+        decision = alloc.size_for_signal(
+            strategy="calibration",
+            edge_bps=4000,
+            entry_price_cents=entry_cents,
+            confidence="high",
+        )
+        if not decision.allowed:
+            continue
+        # Recompute total $ at risk exactly like the executor will.
+        contracts = int(decision.size_usd // (entry_cents / 100.0))
+        fee_per = fee_per_contract_cents(entry_cents)
+        total_fees = contracts * fee_per / 100.0
+        total_risk = decision.size_usd + total_fees
+        assert total_risk <= settings.max_position_usd + 1e-6, (
+            f"p={entry_cents}c: notional=${decision.size_usd:.2f} "
+            f"fees=${total_fees:.2f} total=${total_risk:.2f} "
+            f"exceeds cap=${settings.max_position_usd}"
+        )
+
+
 def test_never_exceeds_allocation_room(tmp_db):
     from moneybutton.core.config import get_settings
     from moneybutton.core.money import CapitalAllocator
