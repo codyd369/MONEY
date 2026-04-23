@@ -47,7 +47,26 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--max-pages", type=int, default=None, help="Stop after N pages (for smoke tests)")
     p.add_argument("--rate-limit-sleep-s", type=float, default=DEFAULT_RATE_LIMIT_SLEEP_S)
     p.add_argument("--reset-cursor", action="store_true", help="Clear saved cursor and start over")
+    p.add_argument(
+        "--exclude-event-prefix",
+        nargs="*",
+        default=["MVE"],
+        help=(
+            "Drop markets whose event_ticker starts with any of these prefixes (after the "
+            "leading 'KX'). Default: MVE (drops auto-generated multi-game parlays). "
+            "Pass empty (--exclude-event-prefix) to disable."
+        ),
+    )
     return p.parse_args()
+
+
+def _excluded(m: dict, prefixes: list[str]) -> bool:
+    if not prefixes:
+        return False
+    ev = (m.get("event_ticker") or "").upper()
+    if ev.startswith("KX"):
+        ev = ev[2:]
+    return any(ev.startswith(p.upper()) for p in prefixes)
 
 
 def main() -> int:
@@ -89,6 +108,8 @@ def main() -> int:
             )
             markets = page.get("markets", []) or []
             markets = _filter_resolved(markets)
+            if args.exclude_event_prefix:
+                markets = [m for m in markets if not _excluded(m, args.exclude_event_prefix)]
             kept = _filter_by_since(markets, since) if since else markets
 
             if kept:
