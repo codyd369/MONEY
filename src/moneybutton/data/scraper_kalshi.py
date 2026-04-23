@@ -117,11 +117,38 @@ def _coerce_market_row(m: dict) -> dict:
     Parquet files a stable columnar schema across time even as Kalshi adds
     new fields.
     """
-    return {k: m.get(k) for k in MARKET_KEEP_COLUMNS}
+    row = {k: m.get(k) for k in MARKET_KEEP_COLUMNS}
+    # Kalshi dropped `category` from the market-level response in 2026Q1.
+    # Derive a pseudo-category from the ticker/event_ticker prefix so the
+    # Parquet files still partition into useful buckets.
+    if not row.get("category"):
+        row["category"] = _derive_category(m)
+    return row
+
+
+def _derive_category(m: dict) -> str:
+    """Extract a partition-friendly category from ticker or event_ticker.
+
+    Kalshi tickers follow the pattern `KX<SERIES>-<...>` where <SERIES> is
+    effectively the category (NFL, FED, MVESPORTS, PRES, etc.). We take
+    the first hyphen-separated segment, strip the `KX` prefix, cap length,
+    and uppercase. Fallback is 'UNCATEGORIZED' so downstream code is
+    schema-stable even on totally malformed tickers.
+    """
+    for src in (m.get("event_ticker"), m.get("series_ticker"), m.get("ticker")):
+        if not src:
+            continue
+        first = str(src).split("-", 1)[0]
+        if first.upper().startswith("KX"):
+            first = first[2:]
+        first = first.strip().upper()
+        if first:
+            return first[:20]
+    return "UNCATEGORIZED"
 
 
 def _partition_key_for_market(m: dict) -> PartitionKey:
-    category = (m.get("category") or "UNCATEGORIZED").upper()
+    category = (m.get("category") or _derive_category(m) or "UNCATEGORIZED").upper()
     ts = m.get("close_time") or m.get("expiration_time") or m.get("open_time")
     ym = year_month(ts) if ts else "unknown"
     return PartitionKey(dataset="markets", category_or_source=category, year_month=ym)
@@ -153,12 +180,16 @@ def backfill_markets(
         cursor = progress.cursor
         while True:
             page = client.list_markets(
-                status="settled",
+                # Kalshi renamed "settled" -> "finalized" in the 2026Q1 API
+                # refresh. Send both so we work on either schema; local
+                # filter below keeps only resolved markets (result yes|no).
+                status="settled,finalized",
                 category=category,
                 cursor=cursor,
                 limit=limit_per_page,
             )
             markets = page.get("markets", []) or []
+            markets = _filter_resolved(markets)
             if since is not None and markets:
                 markets = _filter_by_since(markets, since)
             if markets:
@@ -217,6 +248,11 @@ def _filter_by_since(markets: list[dict], since: dt.date) -> list[dict]:
     return kept
 
 
+def _filter_resolved(markets: list[dict]) -> list[dict]:
+    """Keep only markets whose result is yes/no (fully-resolved)."""
+    return [m for m in markets if (m.get("result") or "").lower() in ("yes", "no")]
+
+
 def backfill_prices_for_tickers(
     tickers: Iterable[str],
     *,
@@ -240,7 +276,7 @@ def backfill_prices_for_tickers(
                 continue
             open_ts = market.get("open_time")
             close_ts = market.get("close_time") or market.get("expiration_time")
-            category = (market.get("category") or "UNCATEGORIZED").upper()
+            category = (market.get("category") or _derive_category(market) or "UNCATEGORIZED").upper()
             series_ticker = market.get("series_ticker")
             if not (open_ts and close_ts):
                 continue

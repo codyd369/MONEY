@@ -29,6 +29,7 @@ from moneybutton.data.scraper_kalshi import (
     DEFAULT_RATE_LIMIT_SLEEP_S,
     _coerce_market_row,
     _filter_by_since,
+    _filter_resolved,
     _partition_key_for_market,
     load_progress,
     save_progress,
@@ -78,12 +79,14 @@ def main() -> int:
         cursor = progress.cursor
         while True:
             page = client.list_markets(
-                status="settled",
+                # Kalshi renamed "settled" -> "finalized"; send both.
+                status="settled,finalized",
                 category=args.category,
                 cursor=cursor,
                 limit=args.limit_per_page,
             )
             markets = page.get("markets", []) or []
+            markets = _filter_resolved(markets)
             kept = _filter_by_since(markets, since) if since else markets
 
             if kept:
