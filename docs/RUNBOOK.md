@@ -41,10 +41,36 @@ uv run python scripts/backfill_prices.py --top-n 1000
 # ~1 req/sec, so ~17 min. Skips tickers already on disk.
 ```
 
+## News scraping + relevance scoring
+
+```
+# Free RSS feeds always. Uses NEWSAPI_KEY / EVENTREGISTRY_KEY if set in .env.
+# Default --since is 7 days ago; override for backfill.
+uv run python scripts/backfill_news.py --since 2025-01-01
+
+# Score news relevance against markets using the LLM (settings.llm_model_news,
+# default anthropic/claude-haiku-4-5; set to gemini/gemini-2.0-flash-exp for
+# free). Keyword pre-filter drops ~99% of pairs before any LLM call.
+uv run python scripts/score_news_relevance.py --max-pairs 2000
+
+# --max-pairs caps total LLM calls per run for cost control. The score table
+# dedupes on (news_id, ticker) so rerunning is additive.
+```
+
+News features (news_count_24h, news_material_count_24h, news_bias_yes_24h,
+news_max_confidence_24h, and 168h variants) are automatically added to
+the training frame by `features/pipeline.py`. If no news is on disk, the
+features are all None and XGBoost handles them natively.
+
 ## Train + backtest the calibration model
 
 ```
 uv run python scripts/train_calibration_v1.py
+# --max-per-series 100 (default) caps any single ticker-series so auto-gen
+#   series (hourly weather, parlay) don't dominate the loss function.
+# --min-trade-rows 5 drops markets that never actually traded.
+# --categories Politics Economics Sports restricts the training set.
+
 uv run python scripts/walk_forward_calibration.py
 uv run python scripts/backtest_all_strategies.py
 ```

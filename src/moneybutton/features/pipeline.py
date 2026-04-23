@@ -25,6 +25,7 @@ import pandas as pd
 
 from moneybutton.features import (
     market_features,
+    news_features,
     orderbook_features,
     price_features,
     temporal_features,
@@ -57,6 +58,7 @@ def compute_features(
     feats.update(volume_features.compute(market, as_of_ts, prices_df))
     feats.update(orderbook_features.compute(market, as_of_ts, prices_df, orderbook_df))
     feats.update(temporal_features.compute(market, as_of_ts))
+    feats.update(news_features.compute(market, as_of_ts))
     return feats
 
 

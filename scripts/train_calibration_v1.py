@@ -6,6 +6,7 @@ proper `python -m moneybutton models train calibration` command.
 
 from __future__ import annotations
 
+import argparse
 import datetime as dt
 import json
 from pathlib import Path
@@ -23,7 +24,34 @@ from moneybutton.models.calibration import build_train_report, time_split, train
 from moneybutton.models.registry import register
 
 
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(description="Train calibration v1 on on-disk data.")
+    p.add_argument(
+        "--max-per-series",
+        type=int,
+        default=100,
+        help="Cap any one ticker-series to N markets before training. Prevents "
+        "auto-gen series (hourly weather, parlay) from dominating the loss. "
+        "Set to 0 to disable.",
+    )
+    p.add_argument(
+        "--min-trade-rows",
+        type=int,
+        default=5,
+        help="Drop markets that had fewer than N candle rows with a real trade. "
+        "Markets with no trades tell the model nothing about price dynamics.",
+    )
+    p.add_argument(
+        "--categories",
+        nargs="+",
+        default=None,
+        help="Restrict training set to these event-categories (e.g., Politics Economics Sports).",
+    )
+    return p.parse_args()
+
+
 def main() -> int:
+    args = _parse_args()
     markets = read_dataset("markets")
     prices = read_dataset("prices")
     if markets.empty or prices.empty:
@@ -31,6 +59,39 @@ def main() -> int:
         return 1
     # Filter to settled markets with a result.
     markets = markets[markets["result"].isin(["yes", "no"])].copy()
+
+    if args.categories:
+        markets = markets[markets["category"].isin(args.categories)]
+        print(f"filtered to categories {args.categories}: {len(markets)} markets")
+
+    if args.max_per_series and args.max_per_series > 0:
+        markets["_series"] = markets["ticker"].str.split("-", n=1).str[0]
+        before = len(markets)
+        markets = markets.groupby("_series", group_keys=False).head(args.max_per_series)
+        after = len(markets)
+        markets = markets.drop(columns=["_series"])
+        if before != after:
+            print(f"max_per_series={args.max_per_series}: {before} -> {after} markets")
+
+    if args.min_trade_rows > 0 and not prices.empty:
+        traded = (
+            prices[prices["last_price_close"].notna()]
+            .groupby("ticker")
+            .size()
+            .loc[lambda s: s >= args.min_trade_rows]
+            .index
+        )
+        before = len(markets)
+        markets = markets[markets["ticker"].isin(traded)]
+        after = len(markets)
+        print(
+            f"min_trade_rows={args.min_trade_rows}: dropped {before - after} markets "
+            f"with <{args.min_trade_rows} trade rows; kept {after}"
+        )
+
+    if markets.empty:
+        print("no markets survived filtering")
+        return 1
 
     print(f"training frame: {len(markets)} markets, {len(prices)} price rows")
 
