@@ -240,6 +240,7 @@ class KalshiClient:
         start_ts: int,
         end_ts: int,
         period_interval: int = 60,
+        max_candles_per_call: int = 4500,
     ) -> dict[str, Any]:
         """Candlestick price history. `period_interval` is in minutes.
 
@@ -250,22 +251,54 @@ class KalshiClient:
         When `series_ticker` is None, we derive it from the market ticker
         (Kalshi tickers follow the pattern KX<SERIES>-<event>-<market>;
         the series is the first hyphen-separated segment).
+
+        Kalshi caps each response at 5000 candles. When the requested
+        range would exceed that at the given interval, we transparently
+        chunk the request and concatenate the results. `max_candles_per_call`
+        leaves a little headroom under the 5000 limit.
         """
         if not series_ticker:
             series_ticker = ticker.split("-", 1)[0]
         if not series_ticker:
             raise ValueError(f"Could not derive series_ticker from ticker={ticker!r}")
+        if end_ts <= start_ts:
+            return {"candlesticks": []}
+
         path = f"{_API_PREFIX}/series/{series_ticker}/markets/{ticker}/candlesticks"
-        return self._request(
-            "GET",
-            path,
-            params={
-                "start_ts": start_ts,
-                "end_ts": end_ts,
-                "period_interval": period_interval,
-            },
-            signed=False,
-        )
+        interval_sec = period_interval * 60
+        requested = (end_ts - start_ts) / interval_sec
+
+        if requested <= max_candles_per_call:
+            return self._request(
+                "GET",
+                path,
+                params={
+                    "start_ts": start_ts,
+                    "end_ts": end_ts,
+                    "period_interval": period_interval,
+                },
+                signed=False,
+            )
+
+        # Chunked path.
+        chunk_sec = max_candles_per_call * interval_sec
+        all_candles: list[dict[str, Any]] = []
+        current = start_ts
+        while current < end_ts:
+            chunk_end = min(current + chunk_sec, end_ts)
+            resp = self._request(
+                "GET",
+                path,
+                params={
+                    "start_ts": current,
+                    "end_ts": chunk_end,
+                    "period_interval": period_interval,
+                },
+                signed=False,
+            )
+            all_candles.extend(resp.get("candlesticks", []) or [])
+            current = chunk_end
+        return {"candlesticks": all_candles}
 
     def list_events(
         self,

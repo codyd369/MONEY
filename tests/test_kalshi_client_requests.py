@@ -135,6 +135,68 @@ def test_get_candlesticks_explicit_series_overrides(tmp_env):
     assert "/series/EXPLICIT/markets/" in captured["path"]
 
 
+def test_get_candlesticks_chunks_long_ranges(tmp_env):
+    """Kalshi caps each response at 5000 candles. A range requesting more
+    than that (Fed Chair nomination windows span 10k+ hourly candles)
+    must be split into multiple requests transparently."""
+    chunk_requests: list[tuple[int, int]] = []
+    candle_id = {"n": 0}
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        q = request.url.params
+        start = int(q.get("start_ts"))
+        end = int(q.get("end_ts"))
+        chunk_requests.append((start, end))
+        # Return one fake candle per chunk so the caller can count them.
+        candle_id["n"] += 1
+        return httpx.Response(
+            200,
+            json={"candlesticks": [{"end_period_ts": end, "id": candle_id["n"]}]},
+        )
+
+    transport = httpx.MockTransport(_handler)
+    client = httpx.Client(transport=transport)
+
+    # 2-year range at 60m intervals = 17,520 candles => should chunk into 4
+    # calls with max_candles_per_call=4500.
+    start = 1_700_000_000
+    end = start + 2 * 365 * 24 * 3600
+    with KalshiClient(client=client) as kc:
+        resp = kc.get_candlesticks(
+            "KXFED-25MAR-HIKE",
+            start_ts=start,
+            end_ts=end,
+            period_interval=60,
+            max_candles_per_call=4500,
+        )
+
+    # 4 chunks expected (17520 / 4500 = ~3.9, so 4 requests).
+    assert len(chunk_requests) == 4
+    # Chunks are contiguous + cover the full range.
+    assert chunk_requests[0][0] == start
+    assert chunk_requests[-1][1] == end
+    for i in range(len(chunk_requests) - 1):
+        assert chunk_requests[i][1] == chunk_requests[i + 1][0]
+    # Concatenated candlesticks present in response.
+    assert len(resp["candlesticks"]) == 4
+
+
+def test_get_candlesticks_short_range_no_chunking(tmp_env):
+    transport, captured = _mock_transport_capturing_last()
+    client = httpx.Client(transport=transport)
+    with KalshiClient(client=client) as kc:
+        kc.get_candlesticks(
+            "KXFED-25MAR-HIKE",
+            start_ts=1_700_000_000,
+            end_ts=1_700_000_000 + 30 * 24 * 3600,  # 30 days; ~720 candles
+            period_interval=60,
+            max_candles_per_call=4500,
+        )
+    # Only one request — no chunking needed.
+    q = captured["query"]
+    assert "start_ts=1700000000" in q
+
+
 def test_backfill_markets_sends_status_settled(tmp_db):
     """Kalshi's /markets `status` query param accepts the legacy vocabulary
     (settled), not the newer response label (finalized). Comma-separated
