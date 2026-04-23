@@ -180,10 +180,12 @@ def backfill_markets(
         cursor = progress.cursor
         while True:
             page = client.list_markets(
-                # Kalshi renamed "settled" -> "finalized" in the 2026Q1 API
-                # refresh. Send both so we work on either schema; local
-                # filter below keeps only resolved markets (result yes|no).
-                status="settled,finalized",
+                # Kalshi's status param takes a single value (not a comma-
+                # separated list — that 400s with "invalid status filter").
+                # "finalized" is the 2026Q1 canonical for resolved markets.
+                # Belt-and-braces: _filter_resolved below keeps only rows
+                # whose result is yes|no so any other label still works.
+                status="finalized",
                 category=category,
                 cursor=cursor,
                 limit=limit_per_page,

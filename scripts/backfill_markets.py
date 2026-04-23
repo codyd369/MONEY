@@ -79,8 +79,10 @@ def main() -> int:
         cursor = progress.cursor
         while True:
             page = client.list_markets(
-                # Kalshi renamed "settled" -> "finalized"; send both.
-                status="settled,finalized",
+                # Kalshi's status param is single-valued; use "finalized"
+                # (the 2026Q1 canonical for resolved). _filter_resolved
+                # below catches any other label via the `result` field.
+                status="finalized",
                 category=args.category,
                 cursor=cursor,
                 limit=args.limit_per_page,
