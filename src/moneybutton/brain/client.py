@@ -1,18 +1,36 @@
-"""Anthropic SDK wrapper (SPEC §3 LLM section, §10.5, §12, §14).
+"""Multi-provider LLM wrapper via LiteLLM (SPEC §3 LLM, §10.5, §12, §14).
 
-The LLM is a supporting actor in this system, not a primary signal source:
-  - news_relevance scoring (high volume, Haiku 4.5 by default)
-  - content writing, topic discovery, weekly self-review (Opus 4.7 by default)
+The LLM is a supporting actor here, not a primary signal source:
+  - news_relevance scoring (high volume, cheap model)
+  - content writing, topic discovery, weekly self-review (general model)
   - market-mapping suggestions for strategies 2 & 3
 
-This wrapper exists so every caller gets uniform:
-  - retry on 429/500/overloaded (tenacity exponential backoff),
-  - structured JSON output via response_format + schema validation,
-  - on-disk prompt cache keyed by (model, system, messages_hash) so dev
-    iteration does not burn credits,
-  - cost accounting: usage totals captured per call for the weekly report.
+LiteLLM lets you switch providers by just changing the model string. The
+prefix picks the backend:
 
-Secrets live in Settings (SecretStr); the client never logs them.
+    anthropic/claude-opus-4-7       -> Anthropic (reads ANTHROPIC_API_KEY)
+    anthropic/claude-haiku-4-5
+    gemini/gemini-2.5-flash         -> Google AI Studio (GEMINI_API_KEY)
+    gemini/gemini-2.0-flash-exp     (free tier)
+    groq/llama-3.3-70b-versatile    -> Groq (GROQ_API_KEY)
+    openrouter/<model>              -> OpenRouter (OPENROUTER_API_KEY)
+    ollama/llama3.1                 -> Local Ollama (OLLAMA_BASE_URL)
+
+Settings.llm_model_general + llm_model_news use this format directly.
+One process can call multiple providers in the same run — for example,
+route news_relevance to free Gemini Flash and content writing to
+Anthropic Opus.
+
+What this wrapper adds on top of LiteLLM:
+  - On-disk prompt cache keyed by (model, system, messages) so dev
+    iteration does not burn credits.
+  - Exponential-backoff retry on rate-limit / transient errors.
+  - Uniform usage accounting (prompt/completion/cache tokens + elapsed_s)
+    across providers.
+  - Optional json_mode that appends a strict-JSON nudge and parses the
+    response (still caller's job to validate shape).
+
+Secrets live in Settings (SecretStr). This module never logs them.
 """
 
 from __future__ import annotations
@@ -20,12 +38,21 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import anthropic
+import litellm
+from litellm.exceptions import (
+    APIConnectionError,
+    APIError,
+    InternalServerError,
+    RateLimitError,
+    ServiceUnavailableError,
+    Timeout,
+)
 from tenacity import (
     retry,
     retry_if_exception_type,
@@ -37,13 +64,17 @@ from moneybutton.core.config import Settings, get_settings
 
 log = logging.getLogger("moneybutton.brain")
 
-# Exceptions considered retriable. Rate limits and transient overload must be
-# retried with backoff; invalid-request and auth errors should fail fast.
+# LiteLLM emits a lot of debug noise by default; quiet it.
+litellm.drop_params = True  # providers that don't support a param will silently ignore instead of error
+litellm.suppress_debug_info = True
+
 _RETRIABLE = (
-    anthropic.RateLimitError,
-    anthropic.APIConnectionError,
-    anthropic.InternalServerError,
-    anthropic.APIStatusError,  # broader catch-all for 5xx
+    RateLimitError,
+    APIConnectionError,
+    Timeout,
+    InternalServerError,
+    ServiceUnavailableError,
+    APIError,  # broad catch-all for 5xx-ish
 )
 
 
@@ -73,32 +104,34 @@ class LLMResponse:
 
 @dataclass
 class BrainClient:
-    """Thin, opinionated wrapper around the Anthropic Messages API.
-
-    Disk cache: JSON files keyed by a sha256 of the request; lookup is O(1)
-    via filename. Cache is per-project under data/brain_cache/ and safe to
-    wipe.
-    """
+    """Provider-agnostic wrapper around LiteLLM's completion API."""
 
     settings: Settings = field(default_factory=get_settings)
     cache_dir: Path = field(init=False)
-    _client: anthropic.Anthropic | None = field(init=False, default=None)
 
     def __post_init__(self) -> None:
         self.cache_dir = Path(self.settings.data_dir) / "brain_cache"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
+        self._configure_provider_env()
 
     # ------------------------------------------------------------------
-    def _ensure_client(self) -> anthropic.Anthropic:
-        if self._client is not None:
-            return self._client
-        key = self.settings.anthropic_api_key.get_secret_value()
-        if not key:
-            raise RuntimeError(
-                "ANTHROPIC_API_KEY is not set. Add it to .env before running LLM calls."
-            )
-        self._client = anthropic.Anthropic(api_key=key)
-        return self._client
+    def _configure_provider_env(self) -> None:
+        """Surface configured API keys into os.environ so LiteLLM's built-in
+        env discovery picks them up. LiteLLM reads ANTHROPIC_API_KEY,
+        GEMINI_API_KEY, GROQ_API_KEY, OPENROUTER_API_KEY directly.
+        """
+        mapping = {
+            "ANTHROPIC_API_KEY": self.settings.anthropic_api_key,
+            "GEMINI_API_KEY": self.settings.gemini_api_key,
+            "GROQ_API_KEY": self.settings.groq_api_key,
+            "OPENROUTER_API_KEY": self.settings.openrouter_api_key,
+        }
+        for name, secret in mapping.items():
+            value = secret.get_secret_value() if secret else ""
+            if value and not os.environ.get(name):
+                os.environ[name] = value
+        if self.settings.ollama_base_url and not os.environ.get("OLLAMA_API_BASE"):
+            os.environ["OLLAMA_API_BASE"] = self.settings.ollama_base_url
 
     @staticmethod
     def _cache_key(model: str, system: str, messages: list[dict]) -> str:
@@ -118,10 +151,12 @@ class BrainClient:
         temperature: float = 0.0,
         use_cache: bool = True,
         json_mode: bool = False,
+        mock_response: str | None = None,
     ) -> LLMResponse:
-        """One-shot completion. `json_mode=True` appends a 'return JSON' nudge
-        to the last user turn and json-loads the response; caller still must
-        validate the shape.
+        """One-shot completion.
+
+        `model` defaults to settings.llm_model_general. `mock_response` (dev/
+        test only) bypasses any network call and returns the string verbatim.
         """
         chosen_model = model or self.settings.llm_model_general
 
@@ -133,31 +168,48 @@ class BrainClient:
                     "content": messages[-1]["content"] + "\n\nReturn STRICT JSON only.",
                 }
 
+        # Build the message list LiteLLM expects (OpenAI-style: system goes
+        # as role=system, litellm translates for Anthropic/Gemini/Ollama).
+        messages_for_llm = [{"role": "system", "content": system}, *messages]
+
+        cache_path: Path | None = None
         if use_cache:
             key = self._cache_key(chosen_model, system, messages)
             cache_path = self.cache_dir / f"{key}.json"
             if cache_path.exists():
                 cached = json.loads(cache_path.read_text("utf-8"))
-                usage = LLMUsage(model=chosen_model, **cached.get("usage", {}))
-                parsed = cached.get("json")
+                cached_usage = dict(cached.get("usage", {}))
+                cached_usage.pop("model", None)  # avoid dup kwarg; we fix it below
+                usage = LLMUsage(model=chosen_model, **cached_usage)
                 return LLMResponse(
                     text=cached["text"],
-                    json_=parsed,
+                    json_=cached.get("json"),
                     usage=usage,
                     model=chosen_model,
                     raw_stop_reason=cached.get("stop_reason"),
                 )
 
+        started = time.monotonic()
         resp = self._call_with_retry(
             model=chosen_model,
-            system=system,
-            messages=messages,
+            messages=messages_for_llm,
             max_tokens=max_tokens,
             temperature=temperature,
+            mock_response=mock_response,
         )
-        text = "".join(
-            block.text for block in resp.content if getattr(block, "type", None) == "text"
-        )
+        elapsed = time.monotonic() - started
+
+        choice = resp.choices[0] if getattr(resp, "choices", None) else None
+        text = ""
+        stop_reason = None
+        if choice is not None:
+            msg = getattr(choice, "message", None) or (choice.get("message") if isinstance(choice, dict) else None)
+            if msg is not None:
+                text = getattr(msg, "content", None) or (msg.get("content") if isinstance(msg, dict) else "") or ""
+            stop_reason = getattr(choice, "finish_reason", None)
+            if stop_reason is None and isinstance(choice, dict):
+                stop_reason = choice.get("finish_reason")
+
         parsed = None
         if json_mode:
             try:
@@ -165,28 +217,28 @@ class BrainClient:
             except json.JSONDecodeError:
                 log.warning("LLM json_mode requested but response wasn't valid JSON")
 
+        usage_obj = getattr(resp, "usage", None)
         usage = LLMUsage(
             model=chosen_model,
-            input_tokens=getattr(resp.usage, "input_tokens", 0) or 0,
-            output_tokens=getattr(resp.usage, "output_tokens", 0) or 0,
-            cache_creation_input_tokens=getattr(
-                resp.usage, "cache_creation_input_tokens", 0
-            ) or 0,
-            cache_read_input_tokens=getattr(
-                resp.usage, "cache_read_input_tokens", 0
-            ) or 0,
+            input_tokens=_getattr_or_key(usage_obj, "prompt_tokens", 0),
+            output_tokens=_getattr_or_key(usage_obj, "completion_tokens", 0),
+            cache_creation_input_tokens=_getattr_or_key(
+                usage_obj, "cache_creation_input_tokens", 0
+            ),
+            cache_read_input_tokens=_getattr_or_key(
+                usage_obj, "cache_read_input_tokens", 0
+            ),
+            elapsed_s=elapsed,
         )
 
-        if use_cache:
-            key = self._cache_key(chosen_model, system, messages)
-            cache_path = self.cache_dir / f"{key}.json"
+        if cache_path is not None:
             cache_path.write_text(
                 json.dumps(
                     {
                         "text": text,
                         "json": parsed,
                         "usage": usage.as_dict(),
-                        "stop_reason": getattr(resp, "stop_reason", None),
+                        "stop_reason": stop_reason,
                     },
                     default=str,
                 ),
@@ -198,7 +250,7 @@ class BrainClient:
             json_=parsed,
             usage=usage,
             model=chosen_model,
-            raw_stop_reason=getattr(resp, "stop_reason", None),
+            raw_stop_reason=stop_reason,
         )
 
     @retry(
@@ -211,23 +263,37 @@ class BrainClient:
         self,
         *,
         model: str,
-        system: str,
         messages: list[dict],
         max_tokens: int,
         temperature: float,
-    ) -> anthropic.types.Message:
-        client = self._ensure_client()
+        mock_response: str | None,
+    ):
+        kwargs: dict[str, Any] = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if mock_response is not None:
+            kwargs["mock_response"] = mock_response
         started = time.monotonic()
         try:
-            return client.messages.create(
-                model=model,
-                system=system,
-                messages=messages,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
+            return litellm.completion(**kwargs)
         finally:
             log.debug("brain.complete elapsed=%.3fs model=%s", time.monotonic() - started, model)
+
+
+def _getattr_or_key(obj: Any, name: str, default: int = 0) -> int:
+    if obj is None:
+        return default
+    if isinstance(obj, dict):
+        v = obj.get(name)
+    else:
+        v = getattr(obj, name, None)
+    try:
+        return int(v) if v is not None else default
+    except (TypeError, ValueError):
+        return default
 
 
 # ------------------------------- helpers ---------------------------------

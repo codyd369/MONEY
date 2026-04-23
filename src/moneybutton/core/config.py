@@ -89,10 +89,22 @@ class Settings(BaseSettings):
     newsapi_key: SecretStr = SecretStr("")
     eventregistry_key: SecretStr = SecretStr("")
 
-    # -------- Anthropic ---------------------------------------------------
+    # -------- LLM providers (LiteLLM routed) -----------------------------
+    # llm_model_general + llm_model_news are LiteLLM model strings. The
+    # prefix picks the backend:
+    #   anthropic/claude-opus-4-7       -> Anthropic
+    #   gemini/gemini-2.5-flash         -> Google AI Studio (free tier)
+    #   groq/llama-3.3-70b-versatile    -> Groq (free tier)
+    #   openrouter/<model>              -> OpenRouter
+    #   ollama/llama3.1                 -> local Ollama
+    # Set only the API keys for the providers you actually use.
     anthropic_api_key: SecretStr = SecretStr("")
-    llm_model_general: str = "claude-opus-4-7"
-    llm_model_news: str = "claude-haiku-4-5"
+    gemini_api_key: SecretStr = SecretStr("")
+    groq_api_key: SecretStr = SecretStr("")
+    openrouter_api_key: SecretStr = SecretStr("")
+    ollama_base_url: str = "http://localhost:11434"
+    llm_model_general: str = "anthropic/claude-opus-4-7"
+    llm_model_news: str = "anthropic/claude-haiku-4-5"
 
     # -------- Content publishing ------------------------------------------
     devto_api_key: SecretStr = SecretStr("")
