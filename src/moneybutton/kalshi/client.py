@@ -262,9 +262,12 @@ class KalshiClient:
         cursor: str | None = None,
         limit: int = 200,
         series_ticker: str | None = None,
+        category: str | None = None,
     ) -> dict[str, Any]:
-        """Event-level listing. Used by features/relationships to cluster
-        markets for strategies 2 and 3."""
+        """Event-level listing. Events carry `category` (and a clean taxonomy
+        of Elections/Politics/Sports/Economics/...) — our events-first
+        backfill uses this as the primary grouping instead of the now-
+        unreliable /markets category filter."""
         return self._request(
             "GET",
             f"{_API_PREFIX}/events",
@@ -273,6 +276,7 @@ class KalshiClient:
                 "cursor": cursor,
                 "limit": limit,
                 "series_ticker": series_ticker,
+                "category": category,
             },
             signed=False,
         )
