@@ -323,35 +323,60 @@ def backfill_prices_for_tickers(
 
 
 def _project_candlesticks(resp: dict, ticker: str) -> list[dict]:
-    """Flatten a candlesticks response into per-timestamp rows."""
+    """Flatten a candlesticks response into per-timestamp rows.
+
+    Kalshi's 2026Q1 candle schema uses `*_dollars` suffixed string values
+    (e.g. "0.5800") and `*_fp` suffix for counts (volume_fp, open_interest_fp,
+    also string-formatted dollar amounts). We convert everything to ints:
+    prices to cents (int 0..100), volume/OI to contract counts (int).
+    """
+    def _cents(d: dict | None, key: str) -> int | None:
+        if not isinstance(d, dict):
+            return None
+        v = d.get(f"{key}_dollars")
+        if v is None:
+            return None
+        try:
+            return int(round(float(v) * 100))
+        except (TypeError, ValueError):
+            return None
+
+    def _count(c: dict, key: str) -> int | None:
+        v = c.get(key)
+        if v is None:
+            return None
+        try:
+            return int(round(float(v)))
+        except (TypeError, ValueError):
+            return None
+
     out: list[dict] = []
     for c in resp.get("candlesticks", []) or []:
         ts = c.get("end_period_ts") or c.get("ts")
         if ts is None:
             continue
         ts_iso = dt.datetime.fromtimestamp(int(ts), tz=dt.timezone.utc).isoformat()
-        # Kalshi returns nested price blocks: yes_bid, yes_ask, price (fills).
-        yes_bid = c.get("yes_bid", {}) if isinstance(c.get("yes_bid"), dict) else {}
-        yes_ask = c.get("yes_ask", {}) if isinstance(c.get("yes_ask"), dict) else {}
-        price = c.get("price", {}) if isinstance(c.get("price"), dict) else {}
+        yes_bid = c.get("yes_bid") if isinstance(c.get("yes_bid"), dict) else None
+        yes_ask = c.get("yes_ask") if isinstance(c.get("yes_ask"), dict) else None
+        price = c.get("price") if isinstance(c.get("price"), dict) else None
         out.append(
             {
                 "ticker": ticker,
                 "ts": ts_iso,
-                "yes_bid_open": yes_bid.get("open"),
-                "yes_bid_high": yes_bid.get("high"),
-                "yes_bid_low": yes_bid.get("low"),
-                "yes_bid_close": yes_bid.get("close"),
-                "yes_ask_open": yes_ask.get("open"),
-                "yes_ask_high": yes_ask.get("high"),
-                "yes_ask_low": yes_ask.get("low"),
-                "yes_ask_close": yes_ask.get("close"),
-                "last_price_open": price.get("open"),
-                "last_price_high": price.get("high"),
-                "last_price_low": price.get("low"),
-                "last_price_close": price.get("close"),
-                "volume": c.get("volume"),
-                "open_interest": c.get("open_interest"),
+                "yes_bid_open": _cents(yes_bid, "open"),
+                "yes_bid_high": _cents(yes_bid, "high"),
+                "yes_bid_low": _cents(yes_bid, "low"),
+                "yes_bid_close": _cents(yes_bid, "close"),
+                "yes_ask_open": _cents(yes_ask, "open"),
+                "yes_ask_high": _cents(yes_ask, "high"),
+                "yes_ask_low": _cents(yes_ask, "low"),
+                "yes_ask_close": _cents(yes_ask, "close"),
+                "last_price_open": _cents(price, "open"),
+                "last_price_high": _cents(price, "high"),
+                "last_price_low": _cents(price, "low"),
+                "last_price_close": _cents(price, "close"),
+                "volume": _count(c, "volume_fp"),
+                "open_interest": _count(c, "open_interest_fp"),
             }
         )
     return out

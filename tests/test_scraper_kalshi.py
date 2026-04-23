@@ -104,3 +104,97 @@ def test_filter_resolved_handles_uppercase():
     ]
     kept = _filter_resolved(rows)
     assert {m["ticker"] for m in kept} == {"X", "Y"}
+
+
+def test_project_candlesticks_2026q1_schema():
+    """Kalshi's 2026Q1 candle schema has *_dollars string fields + _fp
+    counts. Fixture is copied from scripts/inspect_candles.py output on
+    a real KXDJTVOSTARIFFS market."""
+    from moneybutton.data.scraper_kalshi import _project_candlesticks
+
+    resp = {
+        "candlesticks": [
+            # Candle with quotes but no trades (price={}).
+            {
+                "end_period_ts": 1756825200,
+                "open_interest_fp": "0.00",
+                "price": {},
+                "volume_fp": "0.00",
+                "yes_ask": {
+                    "close_dollars": "0.5800",
+                    "high_dollars": "1.0000",
+                    "low_dollars": "0.5800",
+                    "open_dollars": "1.0000",
+                },
+                "yes_bid": {
+                    "close_dollars": "0.5200",
+                    "high_dollars": "0.5200",
+                    "low_dollars": "0.0000",
+                    "open_dollars": "0.4800",
+                },
+            },
+            # Candle with trades + OHLC prices.
+            {
+                "end_period_ts": 1756828800,
+                "open_interest_fp": "50.00",
+                "price": {
+                    "close_dollars": "0.5800",
+                    "high_dollars": "0.5800",
+                    "low_dollars": "0.5800",
+                    "mean_dollars": "0.5800",
+                    "open_dollars": "0.5800",
+                },
+                "volume_fp": "50.00",
+                "yes_ask": {
+                    "close_dollars": "0.6000",
+                    "high_dollars": "0.9900",
+                    "low_dollars": "0.5800",
+                    "open_dollars": "0.5800",
+                },
+                "yes_bid": {
+                    "close_dollars": "0.5500",
+                    "high_dollars": "0.5500",
+                    "low_dollars": "0.0100",
+                    "open_dollars": "0.5200",
+                },
+            },
+        ]
+    }
+    rows = _project_candlesticks(resp, "KXDJTVOSTARIFFS")
+    assert len(rows) == 2
+
+    # First candle: no trades -> price fields None, but bid/ask populated.
+    r0 = rows[0]
+    assert r0["ticker"] == "KXDJTVOSTARIFFS"
+    assert r0["ts"].startswith("2025-09-02")
+    assert r0["yes_bid_close"] == 52  # "0.5200" -> 52 cents
+    assert r0["yes_ask_close"] == 58  # "0.5800" -> 58 cents
+    assert r0["yes_bid_open"] == 48
+    assert r0["yes_ask_open"] == 100  # 1.0000 -> 100 cents (full $1 ask = no-bid market)
+    assert r0["last_price_close"] is None  # empty price dict
+    assert r0["volume"] == 0
+    assert r0["open_interest"] == 0
+
+    # Second candle: 50 contracts traded, OHLC all at 58 cents.
+    r1 = rows[1]
+    assert r1["last_price_open"] == 58
+    assert r1["last_price_close"] == 58
+    assert r1["last_price_high"] == 58
+    assert r1["last_price_low"] == 58
+    assert r1["volume"] == 50
+    assert r1["open_interest"] == 50
+
+
+def test_project_candlesticks_handles_missing_end_period_ts():
+    from moneybutton.data.scraper_kalshi import _project_candlesticks
+
+    resp = {"candlesticks": [{"price": {"close_dollars": "0.50"}}]}  # no ts
+    assert _project_candlesticks(resp, "X") == []
+
+
+def test_project_candlesticks_empty_response():
+    from moneybutton.data.scraper_kalshi import _project_candlesticks
+
+    assert _project_candlesticks({}, "X") == []
+    assert _project_candlesticks({"candlesticks": []}, "X") == []
+    assert _project_candlesticks({"candlesticks": None}, "X") == []
