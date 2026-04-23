@@ -267,6 +267,117 @@ class KalshiClient:
             signed=False,
         )
 
+    # ============================== write API =============================
+    # All write methods REQUIRE the signer (KALSHI_API_KEY_ID + private key).
+    # They are only reachable via core/executor.py which gates them behind
+    # the kill switch + DRY_RUN + KALSHI_ENV=prod checks.
+
+    def create_order(
+        self,
+        *,
+        ticker: str,
+        action: str,
+        side: str,
+        count: int,
+        client_order_id: str,
+        type_: str = "limit",
+        yes_price_cents: int | None = None,
+        no_price_cents: int | None = None,
+        buy_max_cost_cents: int | None = None,
+        sell_position_floor: int | None = None,
+        expiration_ts: int | None = None,
+        post_only: bool = False,
+    ) -> dict[str, Any]:
+        """Create an order. Mandatory: ticker, action('buy'|'sell'),
+        side('yes'|'no'), count, client_order_id (idempotency key — reuse
+        the same id and Kalshi returns the same order record).
+
+        For a YES-side limit buy at 42c of 10 contracts:
+            create_order(ticker="KX-...", action="buy", side="yes",
+                         count=10, yes_price_cents=42,
+                         client_order_id="mb_...")
+        """
+        if action not in ("buy", "sell"):
+            raise ValueError(f"action must be buy/sell, got {action!r}")
+        if side not in ("yes", "no"):
+            raise ValueError(f"side must be yes/no, got {side!r}")
+        if count < 1:
+            raise ValueError("count must be >= 1")
+
+        body: dict[str, Any] = {
+            "ticker": ticker,
+            "action": action,
+            "side": side,
+            "count": count,
+            "client_order_id": client_order_id,
+            "type": type_,
+            "post_only": post_only,
+        }
+        if yes_price_cents is not None:
+            body["yes_price"] = yes_price_cents
+        if no_price_cents is not None:
+            body["no_price"] = no_price_cents
+        if buy_max_cost_cents is not None:
+            body["buy_max_cost"] = buy_max_cost_cents
+        if sell_position_floor is not None:
+            body["sell_position_floor"] = sell_position_floor
+        if expiration_ts is not None:
+            body["expiration_ts"] = expiration_ts
+
+        return self._request(
+            "POST",
+            f"{_API_PREFIX}/portfolio/orders",
+            json_body=body,
+            signed=True,
+        )
+
+    def cancel_order(self, order_id: str) -> dict[str, Any]:
+        return self._request(
+            "DELETE",
+            f"{_API_PREFIX}/portfolio/orders/{order_id}",
+            signed=True,
+        )
+
+    def get_portfolio_balance(self) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            f"{_API_PREFIX}/portfolio/balance",
+            signed=True,
+        )
+
+    def get_portfolio_orders(
+        self,
+        *,
+        ticker: str | None = None,
+        status: str | None = None,
+        cursor: str | None = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            f"{_API_PREFIX}/portfolio/orders",
+            params={
+                "ticker": ticker,
+                "status": status,
+                "cursor": cursor,
+                "limit": limit,
+            },
+            signed=True,
+        )
+
+    def get_portfolio_positions(
+        self,
+        *,
+        cursor: str | None = None,
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        return self._request(
+            "GET",
+            f"{_API_PREFIX}/portfolio/positions",
+            params={"cursor": cursor, "limit": limit},
+            signed=True,
+        )
+
 
 def _to_query_value(v: Any) -> str:
     if isinstance(v, bool):
