@@ -76,3 +76,25 @@ def test_empty_params_dict_sends_no_query(tmp_env):
         kc.exchange_status()
     assert captured["path"] == "/trade-api/v2/exchange/status"
     assert captured["query"] == ""
+
+
+def test_backfill_markets_sends_status_settled(tmp_db):
+    """Kalshi's /markets `status` query param accepts the legacy vocabulary
+    (settled), not the newer response label (finalized). Comma-separated
+    values are also rejected with 'invalid status filter'. Pin the exact
+    string the backfill sends so a well-meaning future edit can't break
+    the scrape again.
+    """
+    from moneybutton.data.scraper_kalshi import backfill_markets
+
+    transport, captured = _mock_transport_capturing_last()
+    client = httpx.Client(transport=transport)
+    with KalshiClient(client=client) as kc:
+        backfill_markets(client=kc, max_pages=1)
+
+    q = captured["query"]
+    assert "status=settled" in q
+    # The two things Kalshi rejects:
+    assert "status=finalized" not in q
+    assert "status=settled%2Cfinalized" not in q
+    assert "status=settled,finalized" not in q
