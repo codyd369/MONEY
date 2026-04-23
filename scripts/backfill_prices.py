@@ -42,11 +42,14 @@ from moneybutton.kalshi.client import KalshiClient
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Backfill Kalshi candlestick prices for settled markets.")
     p.add_argument("--top-n", type=int, default=None, help="Pick top N settled markets by volume")
+    p.add_argument("--sample-n", type=int, default=None, help="Randomly sample N markets (stratified by category)")
+    p.add_argument("--max-per-series", type=int, default=None, help="Cap per-series (ticker-prefix) to N markets")
     p.add_argument("--tickers", nargs="+", default=None, help="Explicit ticker list")
     p.add_argument("--category", default=None, help="Restrict to one category (uppercased)")
     p.add_argument("--period-interval", type=int, default=DEFAULT_CANDLE_INTERVAL_MIN, help="Candle interval minutes (60 default)")
     p.add_argument("--rate-limit-sleep-s", type=float, default=DEFAULT_RATE_LIMIT_SLEEP_S)
     p.add_argument("--no-skip-existing", action="store_true", help="Refetch even if prices already on disk")
+    p.add_argument("--seed", type=int, default=42, help="Seed for --sample-n")
     return p.parse_args()
 
 
@@ -59,6 +62,26 @@ def _select_tickers(args, markets: pd.DataFrame) -> list[str]:
         return []
     markets = markets.copy()
     markets["volume"] = pd.to_numeric(markets["volume"], errors="coerce").fillna(0)
+
+    # Per-series cap: avoid being dominated by one hourly-auto-gen series
+    # (e.g. 10,000 NYC-temperature hourly markets drown out 50 CPI ones).
+    if args.max_per_series:
+        markets["_series"] = markets["ticker"].str.split("-", n=1).str[0]
+        markets = markets.groupby("_series", group_keys=False).head(args.max_per_series)
+
+    if args.sample_n and len(markets) > args.sample_n:
+        # Stratified: sample within each category proportionally.
+        if "category" in markets.columns:
+            per_cat = markets.groupby("category", group_keys=False).apply(
+                lambda g: g.sample(
+                    n=max(1, int(round(len(g) / len(markets) * args.sample_n))),
+                    random_state=args.seed,
+                )
+            )
+            markets = per_cat.head(args.sample_n).reset_index(drop=True)
+        else:
+            markets = markets.sample(n=args.sample_n, random_state=args.seed).reset_index(drop=True)
+
     markets = markets.sort_values("volume", ascending=False)
     if args.top_n:
         markets = markets.head(args.top_n)
@@ -157,9 +180,14 @@ def main() -> int:
 
             if i % 25 == 0 or i == len(pending):
                 elapsed = time.monotonic() - t0
+                if i > 0:
+                    eta_s = (elapsed / i) * (len(pending) - i)
+                    eta_str = f"ETA {eta_s / 60:.1f}m" if eta_s < 3600 else f"ETA {eta_s / 3600:.1f}h"
+                else:
+                    eta_str = "ETA ?"
                 print(
                     f"  [{i:>5d}/{len(pending)}] rows_written={rows_written:>7d} "
-                    f"errors={errors:>3d} elapsed={elapsed:>6.0f}s",
+                    f"errors={errors:>3d} elapsed={elapsed:>6.0f}s {eta_str}",
                     flush=True,
                 )
             time.sleep(args.rate_limit_sleep_s)
