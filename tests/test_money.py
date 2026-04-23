@@ -233,9 +233,11 @@ def test_confidence_affects_size(tmp_db):
 
     settings = get_settings()
     alloc = CapitalAllocator(db_path=tmp_db, settings=settings)
-    low = alloc.size_for_signal("calibration", 1000, 40, "low")
-    med = alloc.size_for_signal("calibration", 1000, 40, "med")
-    high = alloc.size_for_signal("calibration", 1000, 40, "high")
+    # Use a 2000 bps edge so that even the low-confidence (0.5x) path
+    # clears MIN_TRADE_USD; otherwise the property we're checking is masked.
+    low = alloc.size_for_signal("calibration", 2000, 40, "low")
+    med = alloc.size_for_signal("calibration", 2000, 40, "med")
+    high = alloc.size_for_signal("calibration", 2000, 40, "high")
     assert low.allowed and med.allowed and high.allowed
     assert low.size_usd <= med.size_usd <= high.size_usd + 1e-9
 
