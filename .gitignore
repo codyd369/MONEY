@@ -1,0 +1,41 @@
+# Environment and secrets
+.env
+.env.local
+*.pem
+
+# Runtime state
+.kill
+data/moneybutton.db
+data/moneybutton.db-journal
+data/moneybutton.db-wal
+data/moneybutton.db-shm
+
+# Generated analytical data and model artifacts
+data/parquet/
+data/models/
+data/outbox/
+data/reports/
+
+# Logs
+logs/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+dist/
+build/
+.venv/
+venv/
+
+# Editors
+.idea/
+.vscode/
+*.swp
+.DS_Store
