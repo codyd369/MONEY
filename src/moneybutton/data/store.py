@@ -170,9 +170,36 @@ def partition_size_bytes(key: PartitionKey) -> int:
 
 
 def year_month(ts_iso_or_epoch: str | int | float) -> str:
-    """Normalize either ISO string or unix seconds into 'YYYY-MM'."""
-    if isinstance(ts_iso_or_epoch, (int, float)):
-        dt = pd.to_datetime(ts_iso_or_epoch, unit="s", utc=True)
-    else:
-        dt = pd.to_datetime(ts_iso_or_epoch, utc=True)
-    return dt.strftime("%Y-%m")
+    """Normalize either ISO string or unix seconds into 'YYYY-MM'.
+
+    RSS feeds emit a zoo of date formats ('Thu, 23 Apr 2026 16:16:17 EST',
+    missing tzinfo, milliseconds-only, etc.). We try pandas first, then
+    dateutil with a named-timezone hint, and fall back to the current UTC
+    month so a single unparseable timestamp never breaks a batch write.
+    """
+    try:
+        if isinstance(ts_iso_or_epoch, (int, float)):
+            ts = pd.to_datetime(ts_iso_or_epoch, unit="s", utc=True)
+        else:
+            ts = pd.to_datetime(ts_iso_or_epoch, utc=True)
+        return ts.strftime("%Y-%m")
+    except (ValueError, TypeError):
+        pass
+
+    try:
+        from dateutil import parser as _dp
+
+        _TZINFOS = {
+            "EST": -5 * 3600, "EDT": -4 * 3600,
+            "CST": -6 * 3600, "CDT": -5 * 3600,
+            "MST": -7 * 3600, "MDT": -6 * 3600,
+            "PST": -8 * 3600, "PDT": -7 * 3600,
+            "UTC": 0, "GMT": 0, "UT": 0, "Z": 0,
+            "BST": +1 * 3600, "CET": +1 * 3600, "CEST": +2 * 3600,
+        }
+        parsed = _dp.parse(str(ts_iso_or_epoch), tzinfos=_TZINFOS)
+        return parsed.strftime("%Y-%m")
+    except Exception:  # noqa: BLE001
+        import datetime as _dt
+
+        return _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m")

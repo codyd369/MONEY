@@ -36,6 +36,41 @@ log = logging.getLogger("moneybutton.scraper.news")
 NEWS_SCHEMA_COLS = ["id", "source", "headline", "body", "url", "ts_iso", "raw_json"]
 
 
+def _normalize_ts(raw: str | None) -> str:
+    """Accept any publisher date format, return ISO-8601 UTC string.
+
+    RSS / NewsAPI / EventRegistry all use different conventions (RFC 2822
+    with named TZ, ISO-8601 with Z, epoch, etc). This helper tries pandas
+    first, then dateutil with a named-TZ hint, and falls back to 'now'
+    as an absolute last resort so a bad timestamp doesn't poison a write.
+    """
+    if not raw:
+        return dt.datetime.now(dt.timezone.utc).isoformat()
+    try:
+        import pandas as _pd
+
+        return _pd.to_datetime(raw, utc=True).isoformat()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        from dateutil import parser as _dp
+
+        _TZ = {
+            "EST": -5 * 3600, "EDT": -4 * 3600,
+            "CST": -6 * 3600, "CDT": -5 * 3600,
+            "MST": -7 * 3600, "MDT": -6 * 3600,
+            "PST": -8 * 3600, "PDT": -7 * 3600,
+            "UTC": 0, "GMT": 0, "UT": 0, "Z": 0,
+            "BST": 3600, "CET": 3600, "CEST": 2 * 3600,
+        }
+        parsed = _dp.parse(str(raw), tzinfos=_TZ)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=dt.timezone.utc)
+        return parsed.astimezone(dt.timezone.utc).isoformat()
+    except Exception:  # noqa: BLE001
+        return dt.datetime.now(dt.timezone.utc).isoformat()
+
+
 def _sanitize_source(s: str) -> str:
     """Make a source name safe for a filesystem path (Windows forbids ':')."""
     return (
@@ -124,7 +159,7 @@ class NewsAPIScraper:
                     "headline": a.get("title") or "",
                     "body": a.get("description") or "",
                     "url": url,
-                    "ts_iso": a.get("publishedAt") or dt.datetime.now(dt.timezone.utc).isoformat(),
+                    "ts_iso": _normalize_ts(a.get("publishedAt")),
                     "raw_json": str(a),
                 }
             )
@@ -174,7 +209,7 @@ class EventRegistryScraper:
                     "headline": e.get("title", {}).get("eng") or e.get("title", "") or "",
                     "body": e.get("summary", {}).get("eng") or e.get("summary", "") or "",
                     "url": e.get("uri", ""),
-                    "ts_iso": e.get("eventDate") or dt.datetime.now(dt.timezone.utc).isoformat(),
+                    "ts_iso": _normalize_ts(e.get("eventDate")),
                     "raw_json": str(e),
                 }
             )
@@ -233,8 +268,8 @@ class RSSScraper:
                         "headline": entry.get("title") or "",
                         "body": entry.get("summary") or "",
                         "url": link,
-                        "ts_iso": (
-                            entry.get("published") or entry.get("updated") or dt.datetime.now(dt.timezone.utc).isoformat()
+                        "ts_iso": _normalize_ts(
+                            entry.get("published") or entry.get("updated")
                         ),
                         "raw_json": str(dict(entry)),
                     }
