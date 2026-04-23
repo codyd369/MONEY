@@ -241,9 +241,21 @@ class KalshiClient:
         end_ts: int,
         period_interval: int = 60,
     ) -> dict[str, Any]:
-        """Candlestick price history. `period_interval` is in minutes."""
-        path = f"{_API_PREFIX}/series/{series_ticker}/markets/{ticker}/candlesticks" \
-               if series_ticker else f"{_API_PREFIX}/markets/{ticker}/candlesticks"
+        """Candlestick price history. `period_interval` is in minutes.
+
+        Kalshi's endpoint is ONLY at
+          /series/{series_ticker}/markets/{ticker}/candlesticks
+        The short form `/markets/{ticker}/candlesticks` returns 404.
+
+        When `series_ticker` is None, we derive it from the market ticker
+        (Kalshi tickers follow the pattern KX<SERIES>-<event>-<market>;
+        the series is the first hyphen-separated segment).
+        """
+        if not series_ticker:
+            series_ticker = ticker.split("-", 1)[0]
+        if not series_ticker:
+            raise ValueError(f"Could not derive series_ticker from ticker={ticker!r}")
+        path = f"{_API_PREFIX}/series/{series_ticker}/markets/{ticker}/candlesticks"
         return self._request(
             "GET",
             path,

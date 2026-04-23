@@ -78,6 +78,63 @@ def test_empty_params_dict_sends_no_query(tmp_env):
     assert captured["query"] == ""
 
 
+def test_get_candlesticks_uses_series_path(tmp_env):
+    """Kalshi's candlestick endpoint is under /series/{s}/markets/{t}/...
+    The short form /markets/{t}/candlesticks returns 404. Pin the path."""
+    transport, captured = _mock_transport_capturing_last()
+    client = httpx.Client(transport=transport)
+    with KalshiClient(client=client) as kc:
+        kc.get_candlesticks(
+            "KXFED-25MAR-HIKE",
+            start_ts=1704067200,
+            end_ts=1711843200,
+            period_interval=60,
+        )
+
+    assert (
+        captured["path"]
+        == "/trade-api/v2/series/KXFED/markets/KXFED-25MAR-HIKE/candlesticks"
+    )
+    q = captured["query"]
+    assert "start_ts=1704067200" in q
+    assert "end_ts=1711843200" in q
+    assert "period_interval=60" in q
+
+
+def test_get_candlesticks_derives_series_from_ticker(tmp_env):
+    """Even when the market response doesn't carry series_ticker, the
+    client derives it from the ticker prefix. These 2026Q1 markets had
+    series_ticker=null in the listing response."""
+    transport, captured = _mock_transport_capturing_last()
+    client = httpx.Client(transport=transport)
+    with KalshiClient(client=client) as kc:
+        kc.get_candlesticks(
+            "KXNEXTIRANLEADER-45JAN01-HKHO",
+            series_ticker=None,
+            start_ts=1,
+            end_ts=2,
+            period_interval=60,
+        )
+    assert captured["path"] == (
+        "/trade-api/v2/series/KXNEXTIRANLEADER/markets/"
+        "KXNEXTIRANLEADER-45JAN01-HKHO/candlesticks"
+    )
+
+
+def test_get_candlesticks_explicit_series_overrides(tmp_env):
+    """Explicit series_ticker wins over the derived one."""
+    transport, captured = _mock_transport_capturing_last()
+    client = httpx.Client(transport=transport)
+    with KalshiClient(client=client) as kc:
+        kc.get_candlesticks(
+            "KXFED-25MAR-HIKE",
+            series_ticker="EXPLICIT",
+            start_ts=1,
+            end_ts=2,
+        )
+    assert "/series/EXPLICIT/markets/" in captured["path"]
+
+
 def test_backfill_markets_sends_status_settled(tmp_db):
     """Kalshi's /markets `status` query param accepts the legacy vocabulary
     (settled), not the newer response label (finalized). Comma-separated
