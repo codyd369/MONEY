@@ -36,28 +36,39 @@ from moneybutton.data.scraper_news import (
 )
 
 
+def _gnews(query: str) -> str:
+    """Google News topic-search RSS — the most reliable pattern in 2026.
+    Returns the RSS URL for a given query string."""
+    from urllib.parse import quote_plus
+
+    return f"https://news.google.com/rss/search?q={quote_plus(query)}&hl=en-US&gl=US&ceid=US:en"
+
+
 DEFAULT_RSS_FEEDS: list[tuple[str, str]] = [
-    # Markets / finance
-    ("reuters_business", "https://feeds.reuters.com/reuters/businessNews"),
-    ("reuters_markets", "https://feeds.reuters.com/reuters/marketsNews"),
-    ("ft_home", "https://www.ft.com/?format=rss"),
+    # Google News topic searches — these always work, pull from many sources.
+    ("gnews_fed_rate", _gnews("federal reserve interest rate")),
+    ("gnews_cpi", _gnews("CPI inflation report")),
+    ("gnews_jobs_report", _gnews("nonfarm payrolls unemployment rate")),
+    ("gnews_opec_oil", _gnews("OPEC oil production")),
+    ("gnews_election", _gnews("election poll results")),
+    ("gnews_congress_bill", _gnews("congress vote bill")),
+    ("gnews_trump", _gnews("Trump policy")),
+    ("gnews_supreme_court", _gnews("supreme court ruling")),
+    ("gnews_bitcoin", _gnews("Bitcoin price")),
+    ("gnews_ethereum", _gnews("Ethereum price")),
+    ("gnews_stocks", _gnews("stock market S&P 500")),
+    ("gnews_earnings", _gnews("quarterly earnings beat miss")),
+    ("gnews_hurricane", _gnews("hurricane forecast NOAA")),
+    ("gnews_ukraine", _gnews("Ukraine war")),
+    ("gnews_middle_east", _gnews("Israel Iran conflict")),
+    # Direct publisher feeds that were confirmed working.
     ("bloomberg_markets", "https://feeds.bloomberg.com/markets/news.rss"),
-    ("wsj_business", "https://feeds.content.dowjones.io/public/rss/RSSWSJD"),
-    ("cnbc_top", "https://www.cnbc.com/id/100003114/device/rss/rss.html"),
-    # Politics / geopolitics
-    ("reuters_politics", "https://feeds.reuters.com/Reuters/PoliticsNews"),
-    ("ap_top", "https://rsshub.app/apnews/topics/apf-topnews"),
-    ("politico_top", "https://rss.politico.com/politics-news.xml"),
-    ("axios_politics", "https://api.axios.com/feed/politics/"),
-    ("bbc_world", "http://feeds.bbci.co.uk/news/world/rss.xml"),
-    # Crypto
-    ("coindesk", "https://www.coindesk.com/arc/outboundfeeds/rss/"),
-    ("decrypt", "https://decrypt.co/feed"),
-    # Weather / climate (relevant to KXHIGH* / KXSUB* markets)
-    ("nhc_hurricanes", "https://www.nhc.noaa.gov/index-at.xml"),
-    # Macro / Fed
     ("fed_press", "https://www.federalreserve.gov/feeds/press_all.xml"),
-    ("treasury_press", "https://home.treasury.gov/rss/press-releases.xml"),
+    ("bbc_world", "https://feeds.bbci.co.uk/news/world/rss.xml"),
+    ("coindesk", "https://www.coindesk.com/arc/outboundfeeds/rss"),
+    ("decrypt", "https://decrypt.co/feed"),
+    ("nhc_hurricanes", "https://www.nhc.noaa.gov/index-at.xml"),
+    ("politico_top", "https://rss.politico.com/politics-news.xml"),
 ]
 
 

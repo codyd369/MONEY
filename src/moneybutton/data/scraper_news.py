@@ -36,8 +36,25 @@ log = logging.getLogger("moneybutton.scraper.news")
 NEWS_SCHEMA_COLS = ["id", "source", "headline", "body", "url", "ts_iso", "raw_json"]
 
 
+def _sanitize_source(s: str) -> str:
+    """Make a source name safe for a filesystem path (Windows forbids ':')."""
+    return (
+        s.replace(":", "_")
+        .replace("/", "_")
+        .replace("\\", "_")
+        .replace("?", "_")
+        .replace("*", "_")
+        .replace('"', "_")
+        .replace("<", "_")
+        .replace(">", "_")
+        .replace("|", "_")
+    )
+
+
 def _hash_id(source: str, url_or_id: str) -> str:
     h = hashlib.sha256(url_or_id.encode("utf-8")).hexdigest()[:24]
+    # The id still uses ':' as a separator (fine for SQLite text columns); only
+    # the partition path is sanitized.
     return f"{source}:{h}"
 
 
@@ -46,12 +63,13 @@ def _write_rows(source: str, rows: list[dict]) -> int:
         return 0
     import pandas as pd
 
+    safe_source = _sanitize_source(source)
     frame = pd.DataFrame(rows, columns=NEWS_SCHEMA_COLS)
     # Bucket by year_month of ts_iso for partitioning.
     written = 0
     for ym, group in frame.groupby(frame["ts_iso"].map(year_month)):
         write_partition(
-            PartitionKey(dataset="news", category_or_source=source, year_month=ym),
+            PartitionKey(dataset="news", category_or_source=safe_source, year_month=ym),
             group,
         )
         written += len(group)
@@ -177,7 +195,20 @@ class RSSScraper:
 
     def __post_init__(self) -> None:
         if self.client is None:
-            self.client = httpx.Client(timeout=30.0)
+            # Many news sites 302/308/301 their feed URLs; httpx defaults to
+            # NOT following redirects (unlike requests). Turn that on.
+            # Some sites also 403 a bare-bones client; send a plausible UA.
+            self.client = httpx.Client(
+                timeout=30.0,
+                follow_redirects=True,
+                headers={
+                    "User-Agent": (
+                        "Mozilla/5.0 (compatible; moneybutton-rss-reader/0.1; "
+                        "+https://github.com/codyd369/money)"
+                    ),
+                    "Accept": "application/rss+xml, application/atom+xml, text/xml, */*",
+                },
+            )
 
     def fetch_all(self) -> dict[str, list[dict]]:
         import feedparser
