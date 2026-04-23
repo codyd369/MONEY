@@ -76,24 +76,41 @@ def main() -> int:
     args = _parse_args()
     settings = get_settings()
 
+    # stdout (not stderr) so PowerShell + PyCharm always surface progress.
+    print(f"backfill_prices: start (env={settings.kalshi_env})", flush=True)
+
     markets = read_dataset("markets")
     if markets.empty:
-        print("no markets on disk. Run scripts/backfill_markets.py first.", file=sys.stderr)
+        print("no markets on disk. Run scripts/backfill_markets.py first.", flush=True)
         return 1
     markets = markets[markets["result"].isin(["yes", "no"])].copy()
 
     tickers = _select_tickers(args, markets)
     if not tickers:
-        print("no tickers matched selection.", file=sys.stderr)
+        print(
+            f"no tickers matched selection. markets_rows={len(markets)} "
+            f"category={args.category!r} top_n={args.top_n!r} tickers={args.tickers!r}",
+            flush=True,
+        )
         return 1
 
     skip_set: set[str] = set() if args.no_skip_existing else _existing_price_tickers()
     pending = [t for t in tickers if t not in skip_set]
     print(
-        f"backfill_prices: {len(tickers)} matched, {len(tickers) - len(pending)} already on disk, "
-        f"{len(pending)} to fetch. interval={args.period_interval}m, sleep={args.rate_limit_sleep_s}s",
-        file=sys.stderr,
+        f"backfill_prices: {len(tickers)} matched, "
+        f"{len(tickers) - len(pending)} already on disk, "
+        f"{len(pending)} to fetch. "
+        f"interval={args.period_interval}m, sleep={args.rate_limit_sleep_s}s",
+        flush=True,
     )
+
+    if not pending:
+        print(
+            "nothing to do. Every ticker already has price rows on disk. "
+            "Pass --no-skip-existing to refetch.",
+            flush=True,
+        )
+        return 0
 
     client = KalshiClient(settings=settings)
     t0 = time.monotonic()
@@ -123,7 +140,10 @@ def main() -> int:
                 )
             except Exception as e:  # noqa: BLE001
                 errors += 1
-                print(f"  [{i:>5d}/{len(pending)}] {ticker} ERROR {type(e).__name__}: {e}", file=sys.stderr)
+                print(
+                    f"  [{i:>5d}/{len(pending)}] {ticker} ERROR {type(e).__name__}: {e}",
+                    flush=True,
+                )
                 continue
 
             rows = _project_candlesticks(resp, ticker)
@@ -140,11 +160,11 @@ def main() -> int:
                 print(
                     f"  [{i:>5d}/{len(pending)}] rows_written={rows_written:>7d} "
                     f"errors={errors:>3d} elapsed={elapsed:>6.0f}s",
-                    file=sys.stderr,
+                    flush=True,
                 )
             time.sleep(args.rate_limit_sleep_s)
     except KeyboardInterrupt:
-        print("backfill_prices: interrupted; rerun to resume (finished tickers skipped).", file=sys.stderr)
+        print("backfill_prices: interrupted; rerun to resume.", flush=True)
         return 130
     finally:
         client.close()
