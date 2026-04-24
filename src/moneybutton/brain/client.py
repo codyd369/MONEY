@@ -212,9 +212,8 @@ class BrainClient:
 
         parsed = None
         if json_mode:
-            try:
-                parsed = json.loads(text)
-            except json.JSONDecodeError:
+            parsed = _try_parse_json(text)
+            if parsed is None:
                 log.warning("LLM json_mode requested but response wasn't valid JSON")
 
         usage_obj = getattr(resp, "usage", None)
@@ -281,6 +280,44 @@ class BrainClient:
             return litellm.completion(**kwargs)
         finally:
             log.debug("brain.complete elapsed=%.3fs model=%s", time.monotonic() - started, model)
+
+
+def _try_parse_json(text: str) -> dict | list | None:
+    """Best-effort JSON parser tolerant of common LLM output quirks:
+    - markdown code fences (```json ... ``` or ``` ... ```)
+    - leading/trailing prose around the JSON object/array
+    - Unicode smart quotes that occasionally sneak in
+    """
+    if not text:
+        return None
+    s = text.strip()
+
+    # Strip markdown fences. LLMs (especially Gemini) wrap JSON in ```json...```.
+    if s.startswith("```"):
+        s = s[3:]
+        if s.lower().startswith("json"):
+            s = s[4:]
+        s = s.strip()
+        if s.endswith("```"):
+            s = s[:-3].strip()
+
+    # Try as-is first.
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        pass
+
+    # Find an embedded object or array — common when models add prose.
+    for open_c, close_c in (("{", "}"), ("[", "]")):
+        first = s.find(open_c)
+        last = s.rfind(close_c)
+        if first != -1 and last > first:
+            candidate = s[first : last + 1]
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+    return None
 
 
 def _getattr_or_key(obj: Any, name: str, default: int = 0) -> int:

@@ -99,8 +99,38 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip markets whose result is already settled (yes/no). For live scoring.",
     )
-    p.add_argument("--rate-limit-sleep-s", type=float, default=0.2)
+    p.add_argument(
+        "--rate-limit-sleep-s",
+        type=float,
+        default=None,
+        help="Sleep between LLM calls. Default: model-aware (Gemini Flash free "
+        "tier is 5-15 RPM => 4-13s; Anthropic / Groq paid => 0.2s).",
+    )
+    p.add_argument(
+        "--max-consecutive-errors",
+        type=int,
+        default=20,
+        help="Abort the run after this many consecutive LLM errors (likely a "
+        "quota or wrong-model issue; bailing keeps the run from spinning).",
+    )
     return p.parse_args()
+
+
+def _default_sleep_for_model(model: str) -> float:
+    """Pick a per-call sleep that matches the model's likely free-tier RPM.
+
+    Gemini AI Studio free tier RPM as of 2026:
+      gemini-2.5-flash       :  5-10  RPM (account-dependent)
+      gemini-2.5-flash-lite  : 15     RPM
+      gemini-2.0-flash       : 15     RPM
+    Anthropic / Groq / Ollama: no per-call throttle needed.
+    """
+    m = model.lower()
+    if "gemini" in m:
+        if "lite" in m:
+            return 4.5  # 13 RPM, leaves headroom under 15
+        return 13.0  # 5 RPM, safe under the strictest tier
+    return 0.2
 
 
 def _ensure_schema(db_path: Path) -> None:
@@ -164,7 +194,15 @@ def main() -> int:
     _ensure_schema(db_path)
 
     model = args.model or settings.llm_model_news
-    print(f"score_news_relevance: start  model={model}", flush=True)
+    sleep_s = args.rate_limit_sleep_s if args.rate_limit_sleep_s is not None else _default_sleep_for_model(model)
+    print(f"score_news_relevance: start  model={model}  sleep={sleep_s:.1f}s/call", flush=True)
+    if "gemini" in model.lower() and sleep_s < 12 and "lite" not in model.lower():
+        print(
+            "  NOTE: gemini-2.5-flash free tier is often 5 RPM. Consider "
+            "--model gemini/gemini-2.5-flash-lite (15 RPM, looser quota) "
+            "or pass --rate-limit-sleep-s 13 to stay under the strict tier.",
+            flush=True,
+        )
 
     # Load news.
     news = read_dataset("news")
@@ -234,6 +272,7 @@ def main() -> int:
     t0 = time.monotonic()
     scored = 0
     errors = 0
+    consecutive_errors = 0
     for i, (news_row, ticker, overlap) in enumerate(new_pairs, 1):
         market = markets[markets["ticker"] == ticker].iloc[0]
         try:
@@ -256,9 +295,24 @@ def main() -> int:
             )
         except Exception as e:  # noqa: BLE001
             errors += 1
-            if errors <= 5:
-                print(f"  [{i}/{len(new_pairs)}] LLM error {type(e).__name__}: {e}", flush=True)
+            consecutive_errors += 1
+            if errors <= 5 or consecutive_errors == args.max_consecutive_errors:
+                # Log the first 5 errors and the one that triggers abort.
+                msg = str(e).replace("\n", " ")[:300]
+                print(f"  [{i}/{len(new_pairs)}] LLM error {type(e).__name__}: {msg}", flush=True)
+            if consecutive_errors >= args.max_consecutive_errors:
+                print(
+                    f"  ABORT: {consecutive_errors} consecutive LLM errors. "
+                    f"Likely a quota or wrong-model issue. {scored} pairs persisted "
+                    f"so far. Switch model or wait, then rerun (already-scored "
+                    f"pairs are skipped).",
+                    flush=True,
+                )
+                break
+            time.sleep(sleep_s)
             continue
+        else:
+            consecutive_errors = 0
 
         parsed = resp.json_ or {}
         _insert_score(
@@ -280,7 +334,7 @@ def main() -> int:
                 f"elapsed={elapsed:.0f}s ETA={eta / 60:.1f}m",
                 flush=True,
             )
-        time.sleep(args.rate_limit_sleep_s)
+        time.sleep(sleep_s)
 
     print()
     print(f"done. scored={scored} errors={errors} elapsed={time.monotonic() - t0:.0f}s")

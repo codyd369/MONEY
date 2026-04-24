@@ -43,6 +43,45 @@ def test_json_mode_parses_valid_json(tmp_env):
     assert resp.text.startswith("{")
 
 
+def test_json_mode_strips_markdown_fences(tmp_env):
+    """Regression: Gemini wraps JSON in ```json ... ``` fences which broke
+    json.loads. _try_parse_json must strip fences before parsing."""
+    bc = BrainClient()
+    resp = bc.complete(
+        system="x",
+        messages=[{"role": "user", "content": "x"}],
+        mock_response="```json\n{\"material\": true, \"direction\": \"yes\"}\n```",
+        json_mode=True,
+        use_cache=False,
+    )
+    assert resp.json_ == {"material": True, "direction": "yes"}
+
+
+def test_json_mode_strips_plain_fences(tmp_env):
+    bc = BrainClient()
+    resp = bc.complete(
+        system="x",
+        messages=[{"role": "user", "content": "x"}],
+        mock_response="```\n{\"a\": 1}\n```",
+        json_mode=True,
+        use_cache=False,
+    )
+    assert resp.json_ == {"a": 1}
+
+
+def test_json_mode_extracts_embedded_object(tmp_env):
+    """When the LLM adds prose around the JSON, find and parse the object."""
+    bc = BrainClient()
+    resp = bc.complete(
+        system="x",
+        messages=[{"role": "user", "content": "x"}],
+        mock_response='Sure, here is the answer: {"answer": 42} hope that helps!',
+        json_mode=True,
+        use_cache=False,
+    )
+    assert resp.json_ == {"answer": 42}
+
+
 def test_json_mode_handles_bad_json(tmp_env):
     bc = BrainClient()
     resp = bc.complete(
