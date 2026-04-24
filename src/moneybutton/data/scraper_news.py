@@ -111,7 +111,32 @@ def _write_rows(source: str, rows: list[dict]) -> int:
     return written
 
 
+def _text_or_dict_first(v) -> str:
+    """EventRegistry sometimes returns {'eng': '...', 'fra': '...'} and
+    sometimes a plain string. Coerce to a string either way (prefer 'eng',
+    fall back to any value, finally empty string). Never returns a dict."""
+    if v is None:
+        return ""
+    if isinstance(v, str):
+        return v
+    if isinstance(v, dict):
+        # Prefer English; else take the first available text value.
+        val = v.get("eng")
+        if val:
+            return str(val)
+        for candidate in v.values():
+            if candidate:
+                return str(candidate)
+        return ""
+    return str(v)
+
+
 # ============================== NewsAPI ================================
+
+
+# NewsAPI Developer (free) plan only serves articles from the last ~30 days
+# and rejects older queries with 426 Upgrade Required. Clamp accordingly.
+NEWSAPI_MAX_LOOKBACK_DAYS = 28
 
 
 @dataclass
@@ -141,7 +166,10 @@ class NewsAPIScraper:
         if sources:
             params["sources"] = sources
         if since:
-            params["from"] = since.isoformat()
+            # Free tier rejects `from` older than ~30 days with 426.
+            cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=NEWSAPI_MAX_LOOKBACK_DAYS)
+            effective_since = max(since, cutoff)
+            params["from"] = effective_since.isoformat()
         assert self.client is not None
         r = self.client.get(f"{self.base_url}/everything", params=params)
         r.raise_for_status()
@@ -156,8 +184,8 @@ class NewsAPIScraper:
                 {
                     "id": _hash_id("newsapi", url),
                     "source": "newsapi",
-                    "headline": a.get("title") or "",
-                    "body": a.get("description") or "",
+                    "headline": str(a.get("title") or ""),
+                    "body": str(a.get("description") or ""),
                     "url": url,
                     "ts_iso": _normalize_ts(a.get("publishedAt")),
                     "raw_json": str(a),
@@ -206,9 +234,11 @@ class EventRegistryScraper:
                 {
                     "id": _hash_id("eventregistry", str(e.get("uri", ""))),
                     "source": "eventregistry",
-                    "headline": e.get("title", {}).get("eng") or e.get("title", "") or "",
-                    "body": e.get("summary", {}).get("eng") or e.get("summary", "") or "",
-                    "url": e.get("uri", ""),
+                    # EventRegistry returns title/summary either as a string
+                    # or as a {"eng": "...", "fra": "..."} dict. Coerce.
+                    "headline": _text_or_dict_first(e.get("title")),
+                    "body": _text_or_dict_first(e.get("summary")),
+                    "url": str(e.get("uri") or ""),
                     "ts_iso": _normalize_ts(e.get("eventDate")),
                     "raw_json": str(e),
                 }

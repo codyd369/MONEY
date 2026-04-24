@@ -128,6 +128,15 @@ def main() -> int:
 
     # ------------------------------ NewsAPI ------------------------------
     if not args.rss_only and settings.newsapi_key.get_secret_value():
+        from moneybutton.data.scraper_news import NEWSAPI_MAX_LOOKBACK_DAYS
+
+        cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=NEWSAPI_MAX_LOOKBACK_DAYS)
+        if since_dt < cutoff:
+            print(
+                f"  NewsAPI: clamping 'from' to {cutoff.date()} "
+                f"(free tier max lookback ~{NEWSAPI_MAX_LOOKBACK_DAYS} days)",
+                flush=True,
+            )
         print(f"  NewsAPI: {len(args.keywords)} queries", flush=True)
         napi = NewsAPIScraper(settings=settings)
         total_napi = 0

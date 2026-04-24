@@ -136,3 +136,31 @@ def test_year_month_handles_garbage_without_raising():
         (now - _dt.timedelta(days=1)).strftime("%Y-%m"),
     }
     assert out in acceptable
+
+
+# ------------------------- EventRegistry title/body coercion --------------
+
+
+def test_text_or_dict_first_plain_string():
+    assert scraper_news._text_or_dict_first("hello") == "hello"
+
+
+def test_text_or_dict_first_prefers_english():
+    assert scraper_news._text_or_dict_first({"eng": "English", "fra": "French"}) == "English"
+
+
+def test_text_or_dict_first_falls_back_to_any_value():
+    """When there's no 'eng' key, take the first available text value so
+    pyarrow gets a string, not a dict. Regression for the operator's
+    ArrowTypeError on EventRegistry ingestion."""
+    # EventRegistry sometimes returns title as a dict WITHOUT the 'eng' key
+    # (e.g. German-only article). Must coerce to a string.
+    out = scraper_news._text_or_dict_first({"deu": "Deutsch", "fra": "Francais"})
+    assert isinstance(out, str)
+    assert out in ("Deutsch", "Francais")  # dict iteration order is insertion
+
+
+def test_text_or_dict_first_empty_inputs():
+    assert scraper_news._text_or_dict_first(None) == ""
+    assert scraper_news._text_or_dict_first({}) == ""
+    assert scraper_news._text_or_dict_first("") == ""
