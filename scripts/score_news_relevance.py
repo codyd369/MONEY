@@ -305,16 +305,20 @@ def main() -> int:
         except Exception as e:  # noqa: BLE001
             errors += 1
             consecutive_errors += 1
+            err_text = str(e)
+            tpd_exhausted = "tokens per day" in err_text or "TPD" in err_text
             if errors <= 5 or consecutive_errors == args.max_consecutive_errors:
-                # Log the first 5 errors and the one that triggers abort.
-                msg = str(e).replace("\n", " ")[:300]
+                msg = err_text.replace("\n", " ")[:300]
                 print(f"  [{i}/{len(new_pairs)}] LLM error {type(e).__name__}: {msg}", flush=True)
-            if consecutive_errors >= args.max_consecutive_errors:
+            # TPD exhaustion is a daily quota — retrying for hours is pointless.
+            # Trip the abort after just 5 consecutive TPD errors.
+            tpd_trip = tpd_exhausted and consecutive_errors >= 5
+            if tpd_trip or consecutive_errors >= args.max_consecutive_errors:
+                reason = "daily token quota exhausted" if tpd_trip else f"{consecutive_errors} consecutive LLM errors"
                 print(
-                    f"  ABORT: {consecutive_errors} consecutive LLM errors. "
-                    f"Likely a quota or wrong-model issue. {scored} pairs persisted "
-                    f"so far. Switch model or wait, then rerun (already-scored "
-                    f"pairs are skipped).",
+                    f"  ABORT: {reason}. {scored} pairs persisted so far. "
+                    f"Switch model or wait for quota reset, then rerun "
+                    f"(already-scored pairs are skipped).",
                     flush=True,
                 )
                 break
