@@ -29,7 +29,7 @@ import pyarrow.parquet as pq
 from moneybutton.core.config import get_settings
 
 
-Dataset = Literal["markets", "prices", "orderbook", "news", "features"]
+Dataset = Literal["markets", "prices", "orderbook", "news", "features", "trades"]
 
 
 @dataclass(frozen=True)
@@ -62,6 +62,7 @@ _DEDUPE_KEYS: dict[str, list[str]] = {
     "orderbook": ["ticker", "ts", "side", "level"],
     "news": ["id"],
     "features": ["ticker", "ts"],
+    "trades": ["trade_id"],
 }
 
 

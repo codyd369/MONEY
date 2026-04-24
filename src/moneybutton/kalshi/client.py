@@ -300,6 +300,39 @@ class KalshiClient:
             current = chunk_end
         return {"candlesticks": all_candles}
 
+    def list_trades(
+        self,
+        *,
+        ticker: str | None = None,
+        cursor: str | None = None,
+        limit: int = 1000,
+        min_ts: int | None = None,
+        max_ts: int | None = None,
+    ) -> dict[str, Any]:
+        """Public trade tape. Paginated, reverse-chronological.
+
+        Each trade has: trade_id, ticker, taker_side ('yes'|'no'),
+        yes_price (cents 0-99), no_price (= 100 - yes_price), count,
+        created_time (ISO-8601).
+
+        This is the right data source for microstructure features —
+        candlesticks bucket trades into OHLCV and throw away the
+        directional/size information that matters for short-horizon
+        price prediction.
+        """
+        return self._request(
+            "GET",
+            f"{_API_PREFIX}/markets/trades",
+            params={
+                "ticker": ticker,
+                "cursor": cursor,
+                "limit": limit,
+                "min_ts": min_ts,
+                "max_ts": max_ts,
+            },
+            signed=False,
+        )
+
     def list_events(
         self,
         *,
