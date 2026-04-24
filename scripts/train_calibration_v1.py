@@ -129,7 +129,9 @@ def main() -> int:
         print(f"dropped {len(dropped)} all-null / non-numeric features: {dropped}")
 
     # Time-based split over the as_of_ts distribution.
-    ts = pd.to_datetime(frame["as_of_ts"], utc=True)
+    # format='ISO8601' handles both whole-second and sub-second ISO strings
+    # so a mixed store (e.g. legacy partitions) doesn't break parsing.
+    ts = pd.to_datetime(frame["as_of_ts"], utc=True, format="ISO8601")
     span = ts.max() - ts.min()
     train_end = ts.quantile(0.6).to_pydatetime()
     val_end = ts.quantile(0.8).to_pydatetime()

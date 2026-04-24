@@ -49,6 +49,11 @@ def compute_features(
     pre-filter by ticker before calling. Post-as_of rows are ignored by
     each module via filter_before, but filtering upstream is a perf win.
     """
+    # Normalize as_of_ts to whole seconds. Sub-second precision leaks into
+    # the stored ISO string (e.g. "2026-04-23T01:34:46.500000+00:00") and
+    # breaks pandas' format inference later when mixed with whole-second
+    # timestamps from other rows.
+    as_of_ts = as_of_ts.replace(microsecond=0)
     feats: dict = {
         "ticker": market["ticker"],
         "as_of_ts": as_of_ts.isoformat(),

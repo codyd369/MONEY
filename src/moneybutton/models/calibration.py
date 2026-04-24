@@ -105,7 +105,8 @@ def time_split(
     if feature_columns is None:
         feature_columns = [c for c in df.columns if c not in {"ticker", ts_col, label_col}]
 
-    ts = pd.to_datetime(df[ts_col], utc=True)
+    # format='ISO8601' tolerates mixed whole-second and sub-second strings.
+    ts = pd.to_datetime(df[ts_col], utc=True, format="ISO8601")
     train_end_ts = pd.Timestamp(train_end)
     val_end_ts = pd.Timestamp(val_end)
     test_end_ts = pd.Timestamp(test_end)
