@@ -16,7 +16,9 @@ import pandas as pd
 from moneybutton.data.store import read_dataset
 from moneybutton.features.pipeline import (
     build_training_frame,
+    default_as_of_after_open,
     default_as_of_before_close,
+    default_as_of_midpoint,
     feature_schema,
     feature_schema_fingerprint,
 )
@@ -26,6 +28,16 @@ from moneybutton.models.registry import register
 
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Train calibration v1 on on-disk data.")
+    p.add_argument(
+        "--as-of-strategy",
+        choices=("early", "mid", "late"),
+        default="early",
+        help=(
+            "When to snapshot features for each market. 'early' = open+4h "
+            "(default, trainable). 'mid' = halfway through life. 'late' = "
+            "close-1h (evaluation only; features leak the answer)."
+        ),
+    )
     p.add_argument(
         "--max-per-series",
         type=int,
@@ -94,8 +106,14 @@ def main() -> int:
         return 1
 
     print(f"training frame: {len(markets)} markets, {len(prices)} price rows")
+    print(f"as-of strategy: {args.as_of_strategy}")
 
-    frame = build_training_frame(markets, prices, default_as_of_before_close())
+    as_of_fn = {
+        "early": default_as_of_after_open(),
+        "mid": default_as_of_midpoint(),
+        "late": default_as_of_before_close(),
+    }[args.as_of_strategy]
+    frame = build_training_frame(markets, prices, as_of_fn)
     # Keep only numeric feature columns for training (XGBoost handles NaN but
     # not object dtypes). Coerce, then drop all-null and non-numeric columns.
     id_cols = {"ticker", "as_of_ts", "label_resolved"}
@@ -157,6 +175,30 @@ def main() -> int:
 
     model, metrics = train(split)
     print("metrics:", json.dumps(metrics, indent=2, default=str))
+
+    # Top feature importances — if yes_price_now / max_24h / etc dominate,
+    # late as-of is leaking the answer and we're reading the market, not
+    # predicting it.
+    importances = sorted(
+        zip(model.feature_columns, model.base.feature_importances_),
+        key=lambda kv: kv[1],
+        reverse=True,
+    )
+    print()
+    print("top 15 features by gain:")
+    for name, imp in importances[:15]:
+        print(f"  {name:<30} {imp:.4f}")
+    # Sanity-flag: if any single feature contributes > 30% AND it's a
+    # price-snapshot feature, the test AUC is almost certainly leakage.
+    top_name, top_imp = importances[0]
+    price_snapshot_names = {"yes_price_now", "max_24h", "min_24h", "mid_price", "last_price_open"}
+    if top_imp > 0.30 and top_name in price_snapshot_names:
+        print()
+        print(
+            f"WARNING: '{top_name}' accounts for {top_imp:.1%} of model gain. "
+            f"This is price-snapshot leakage when as-of is near close. "
+            f"Re-run with --as-of-strategy early for tradable edge."
+        )
 
     html = build_train_report(model, split, metrics)
 
