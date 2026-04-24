@@ -119,17 +119,22 @@ def _parse_args() -> argparse.Namespace:
 def _default_sleep_for_model(model: str) -> float:
     """Pick a per-call sleep that matches the model's likely free-tier RPM.
 
-    Gemini AI Studio free tier RPM as of 2026:
-      gemini-2.5-flash       :  5-10  RPM (account-dependent)
-      gemini-2.5-flash-lite  : 15     RPM
+    Gemini AI Studio free tier RPM as of 2026 (observed, varies by account):
+      gemini-2.5-flash       :  5-10  RPM
+      gemini-2.5-flash-lite  : 10-15  RPM
       gemini-2.0-flash       : 15     RPM
-    Anthropic / Groq / Ollama: no per-call throttle needed.
+    Groq free tier:
+      llama-3.3-70b          : 30     RPM  (much looser — preferred free pick)
+      llama-3.1-8b           : 30     RPM
+    Anthropic / Ollama: no per-call throttle needed.
     """
     m = model.lower()
+    if "groq" in m:
+        return 2.0  # 30 RPM; leave margin
     if "gemini" in m:
         if "lite" in m:
-            return 4.5  # 13 RPM, leaves headroom under 15
-        return 13.0  # 5 RPM, safe under the strictest tier
+            return 6.5  # ~9 RPM; observed free tier is stricter than docs
+        return 13.0  # 5 RPM safe
     return 0.2
 
 

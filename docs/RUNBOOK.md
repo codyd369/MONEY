@@ -62,6 +62,29 @@ news_max_confidence_24h, and 168h variants) are automatically added to
 the training frame by `features/pipeline.py`. If no news is on disk, the
 features are all None and XGBoost handles them natively.
 
+### Picking an LLM provider for news scoring
+
+Observed rate limits on free tiers (2026):
+
+| Provider | Model | Free RPM | Notes |
+|---|---|---:|---|
+| Groq | `llama-3.3-70b-versatile` | 30 | Best free option for this workload |
+| Groq | `llama-3.1-8b-instant` | 30 | Faster, slightly lower quality |
+| Gemini | `gemini-2.5-flash-lite` | 10-15 | Strict quota on some accounts |
+| Gemini | `gemini-2.5-flash` | 5-10 | Often much tighter than docs suggest |
+| Anthropic | `claude-haiku-4-5` | — | Paid, ~$0.25/M in / $1.25/M out, unthrottled |
+
+To switch, update `.env`:
+
+```
+LLM_MODEL_NEWS=groq/llama-3.3-70b-versatile
+GROQ_API_KEY=gsk_...   # from console.groq.com
+```
+
+`score_news_relevance.py` auto-picks a safe per-call sleep based on the
+model string. Override with `--rate-limit-sleep-s N` if your free tier
+is higher than the defaults.
+
 ## Train + backtest the calibration model
 
 ```
