@@ -59,6 +59,17 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Restrict training set to these event-categories (e.g., Politics Economics Sports).",
     )
+    p.add_argument(
+        "--drop-price-features",
+        action="store_true",
+        help=(
+            "Ablation: exclude price-snapshot features (mid_price, yes_price_now, "
+            "max_24h, min_24h, range_24h, yes_price_1h_ago, yes_price_24h_ago, "
+            "last_price_open). Tests whether the non-price features (volume, "
+            "volatility, temporal, category, news) carry any real signal on "
+            "their own."
+        ),
+    )
     return p.parse_args()
 
 
@@ -127,6 +138,28 @@ def main() -> int:
     dropped = [c for c in frame.columns if c not in id_cols and c not in feature_cols]
     if dropped:
         print(f"dropped {len(dropped)} all-null / non-numeric features: {dropped}")
+
+    if args.drop_price_features:
+        PRICE_SNAPSHOT_FEATURES = {
+            "mid_price",
+            "yes_price_now",
+            "yes_price_1h_ago",
+            "yes_price_24h_ago",
+            "max_24h",
+            "min_24h",
+            "range_24h",
+            "last_price_open",
+            "last_price_close",
+            "last_price_high",
+            "last_price_low",
+            "bid_ask_spread_cents",
+        }
+        before = len(feature_cols)
+        feature_cols = [c for c in feature_cols if c not in PRICE_SNAPSHOT_FEATURES]
+        print(
+            f"ABLATION: dropped {before - len(feature_cols)} price-snapshot features; "
+            f"training on {len(feature_cols)} non-price features"
+        )
 
     # Time-based split over the as_of_ts distribution.
     # format='ISO8601' handles both whole-second and sub-second ISO strings
