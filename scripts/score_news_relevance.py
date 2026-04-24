@@ -81,9 +81,24 @@ def _keywords(text: str | None) -> set[str]:
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Score news relevance to markets via LLM.")
     p.add_argument("--since", default=None, help="ISO date; only score news from since onward (default: 7d ago)")
+    p.add_argument("--news-since", default=None, help="Alias of --since for clarity")
     p.add_argument("--model", default=None, help="LiteLLM model id; defaults to settings.llm_model_news")
     p.add_argument("--max-pairs", type=int, default=1000, help="Cap LLM calls per run (token budget safety)")
-    p.add_argument("--min-keyword-overlap", type=int, default=2, help="Require at least N shared keywords")
+    p.add_argument(
+        "--min-keyword-overlap",
+        type=int,
+        default=3,
+        help=(
+            "Require at least N shared keywords between news and market. "
+            "2 is very loose (millions of pairs on a wide scrape). 3 is a "
+            "practical default that still catches obvious matches."
+        ),
+    )
+    p.add_argument(
+        "--only-open-markets",
+        action="store_true",
+        help="Skip markets whose result is already settled (yes/no). For live scoring.",
+    )
     p.add_argument("--rate-limit-sleep-s", type=float, default=0.2)
     return p.parse_args()
 
@@ -156,8 +171,9 @@ def main() -> int:
     if news.empty:
         print("no news on disk. Run scripts/backfill_news.py first.", flush=True)
         return 1
-    if args.since:
-        since_dt = pd.Timestamp(args.since, tz="UTC")
+    since_arg = args.news_since or args.since
+    if since_arg:
+        since_dt = pd.Timestamp(since_arg, tz="UTC")
     else:
         since_dt = pd.Timestamp.now(tz="UTC") - pd.Timedelta(days=7)
     news["ts"] = pd.to_datetime(news["ts_iso"], utc=True, errors="coerce")
@@ -170,6 +186,9 @@ def main() -> int:
     if markets.empty:
         print("no markets on disk. Run backfill_via_events first.", flush=True)
         return 1
+    if args.only_open_markets:
+        markets = markets[~markets["result"].isin(["yes", "no"])].copy()
+        print(f"markets in scope (open only): {len(markets)}", flush=True)
     # Build per-market keyword sets.
     markets["_kws"] = (markets["title"].fillna("") + " " + markets["rules_primary"].fillna("")).map(_keywords)
     print(f"markets in scope: {len(markets)}", flush=True)
@@ -194,6 +213,13 @@ def main() -> int:
     if not pairs:
         print("nothing to score.", flush=True)
         return 0
+    if len(pairs) > 100_000:
+        print(
+            f"  WARNING: {len(pairs):,} pairs is a lot. Consider raising "
+            f"--min-keyword-overlap (currently {args.min_keyword_overlap}), "
+            f"narrowing --news-since, or --only-open-markets.",
+            flush=True,
+        )
 
     # Skip already-scored pairs.
     already = _already_scored_pairs(db_path)
