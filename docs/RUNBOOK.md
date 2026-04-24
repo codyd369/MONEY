@@ -66,18 +66,29 @@ features are all None and XGBoost handles them natively.
 
 Observed rate limits on free tiers (2026):
 
-| Provider | Model | Free RPM | Notes |
-|---|---|---:|---|
-| Groq | `llama-3.3-70b-versatile` | 30 | Best free option for this workload |
-| Groq | `llama-3.1-8b-instant` | 30 | Faster, slightly lower quality |
-| Gemini | `gemini-2.5-flash-lite` | 10-15 | Strict quota on some accounts |
-| Gemini | `gemini-2.5-flash` | 5-10 | Often much tighter than docs suggest |
-| Anthropic | `claude-haiku-4-5` | — | Paid, ~$0.25/M in / $1.25/M out, unthrottled |
+| Provider | Model | Free RPM | Free TPD | Notes |
+|---|---|---:|---:|---|
+| Groq | `llama-3.1-8b-instant` | 30 | 500k | Best free option for bulk scoring |
+| Groq | `llama-3.3-70b-versatile` | 30 | 100k | Stronger but burns TPD fast |
+| Gemini | `gemini-2.5-flash-lite` | 10-15 | ~250k | Strict on some accounts |
+| Gemini | `gemini-2.5-flash` | 5-10 | ~250k | Often tighter than docs suggest |
+| Anthropic | `claude-haiku-4-5` | — | — | Paid, ~$0.25/M in / $1.25/M out, unthrottled |
+
+With the trimmed news-relevance prompt (~500 tokens/call), approximate
+pairs-scorable-per-day per model:
+
+  * groq/llama-3.1-8b-instant   1000 pairs/day
+  * groq/llama-3.3-70b-versatile  200 pairs/day
+  * anthropic/claude-haiku-4-5  unlimited, ~$0.10 per 500 pairs
+
+For bulk scoring (thousands of pairs to build training features), use
+8B instant. For live news-relevance on tens of markets per day, 70B
+versatile or Haiku is fine.
 
 To switch, update `.env`:
 
 ```
-LLM_MODEL_NEWS=groq/llama-3.3-70b-versatile
+LLM_MODEL_NEWS=groq/llama-3.1-8b-instant
 GROQ_API_KEY=gsk_...   # from console.groq.com
 ```
 

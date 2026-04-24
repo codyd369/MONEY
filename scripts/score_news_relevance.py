@@ -282,19 +282,23 @@ def main() -> int:
         market = markets[markets["ticker"] == ticker].iloc[0]
         try:
             system = "You score whether a news headline is MATERIAL to a specific prediction market."
+            # Trim context aggressively: for a yes/no relevance call, the model
+            # only needs the headline and the market's title + one sentence of
+            # rules. 1500 chars each was ~800 context tokens and burned
+            # through Groq's 100k TPD free cap in ~190 calls.
             user_msg = render_prompt(
                 "news_relevance",
-                headline=str(news_row.get("headline") or ""),
-                body=str(news_row.get("body") or "")[:1500],
-                market_title=str(market.get("title") or ""),
-                market_rules=str(market.get("rules_primary") or "")[:1500],
+                headline=str(news_row.get("headline") or "")[:300],
+                body=str(news_row.get("body") or "")[:400],
+                market_title=str(market.get("title") or "")[:200],
+                market_rules=str(market.get("rules_primary") or "")[:400],
                 as_of_ts=str(news_row.get("ts_iso") or ""),
             )
             resp = brain.complete(
                 system=system,
                 messages=[{"role": "user", "content": user_msg}],
                 model=model,
-                max_tokens=400,
+                max_tokens=200,
                 json_mode=True,
                 use_cache=True,
             )
