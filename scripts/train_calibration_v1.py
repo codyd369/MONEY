@@ -112,23 +112,48 @@ def main() -> int:
 
     # Time-based split over the as_of_ts distribution.
     ts = pd.to_datetime(frame["as_of_ts"], utc=True)
+    span = ts.max() - ts.min()
     train_end = ts.quantile(0.6).to_pydatetime()
     val_end = ts.quantile(0.8).to_pydatetime()
     test_end = (ts.max() + pd.Timedelta(days=1)).to_pydatetime()
+    # Scale embargo to the dataset span so short backtests don't lose the
+    # entire val window to a fixed 7-day gap. 5% of span, capped at 7 days,
+    # floored at 6 hours (enough to avoid candle-overlap leakage).
+    embargo = max(
+        pd.Timedelta(hours=6),
+        min(pd.Timedelta(days=7), span * 0.05),
+    )
+    print(f"data span: {span}  embargo: {embargo}")
 
     split = time_split(
         frame,
         train_end=train_end,
         val_end=val_end,
         test_end=test_end,
+        embargo=embargo,
         feature_columns=feature_cols,
     )
+    # Guardrail: if val is empty after the split, fall back to no embargo.
+    if len(split.X_val) == 0:
+        print("val window is empty after embargo; falling back to embargo=0")
+        split = time_split(
+            frame,
+            train_end=train_end,
+            val_end=val_end,
+            test_end=test_end,
+            embargo=pd.Timedelta(0),
+            feature_columns=feature_cols,
+        )
     print(
         f"split: train {len(split.X_train)} / val {len(split.X_val)} / test {len(split.X_test)}"
     )
     print(f"train window: {split.train_window[0]} -> {split.train_window[1]}")
     print(f"val window:   {split.val_window[0]} -> {split.val_window[1]}")
     print(f"test window:  {split.test_window[0]} -> {split.test_window[1]}")
+
+    if len(split.X_val) == 0 or len(split.X_train) == 0:
+        print("ERROR: split produced an empty train or val set; aborting.")
+        return 1
 
     model, metrics = train(split)
     print("metrics:", json.dumps(metrics, indent=2, default=str))
